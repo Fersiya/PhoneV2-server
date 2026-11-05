@@ -127,6 +127,13 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 60
 
+    def _via_proxy(self) -> bool:
+        """True, если запрос пришёл через туннель/прокси (а не напрямую из локальной сети)."""
+        h = self.headers
+        if any(h.get(name) for name in ("CF-Connecting-IP", "CF-Ray", "X-Forwarded-For", "X-Real-IP", "Forwarded")):
+            return True
+        return (h.get("Host", "") or "").lower().split(":")[0].endswith(".trycloudflare.com")
+
     def _client_ip(self) -> str:
         ip = self.client_address[0]
         if ip in ("127.0.0.1", "::1"):  # запрос пришёл через локальный cloudflared
@@ -196,7 +203,8 @@ class Handler(BaseHTTPRequestHandler):
         # Сопряжение в 1 клик для локальной сети Wi-Fi (выдача токена приложению без ручного ввода на ПК)
         if path in ("/api/pair", "/pair"):
             client_ip = self.client_address[0]
-            if not _is_local_request(client_ip):
+            # Запросы из Cloudflare-туннеля приходят с 127.0.0.1, поэтому смотрим на заголовки прокси
+            if self._via_proxy() or not _is_local_request(client_ip):
                 return self._reply(
                     403,
                     json.dumps({

@@ -155,3 +155,39 @@ class ServerTrayModuleTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PairingViaTunnelTestCase(unittest.TestCase):
+    """Через Cloudflare-туннель запросы приходят с 127.0.0.1: токен через /api/pair отдаваться не должен."""
+
+    @classmethod
+    def setUpClass(cls):
+        import http.client
+        import threading
+        from http.server import ThreadingHTTPServer
+        from server import Handler
+        cls.http = http.client
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def _pair(self, headers=None):
+        c = self.http.HTTPConnection("127.0.0.1", self.srv.server_address[1], timeout=5)
+        c.request("GET", "/api/pair", headers=headers or {})
+        r = c.getresponse()
+        r.read()
+        c.close()
+        return r.status
+
+    def test_pair_allowed_locally(self):
+        self.assertEqual(self._pair(), 200)
+
+    def test_pair_blocked_via_cloudflare_headers(self):
+        self.assertEqual(self._pair({"CF-Connecting-IP": "203.0.113.5"}), 403)
+        self.assertEqual(self._pair({"X-Forwarded-For": "203.0.113.5"}), 403)
+
+    def test_pair_blocked_for_trycloudflare_host(self):
+        self.assertEqual(self._pair({"Host": "abc-def.trycloudflare.com"}), 403)
