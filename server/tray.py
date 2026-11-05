@@ -132,7 +132,7 @@ def _copy_to_clipboard(text: str) -> None:
 
 
 def show_status_dialog() -> None:
-    """Отображает компактное диалоговое окно со статусом, IP, токеном и туннелем."""
+    """Окно статуса: адреса, токен, интернет-туннель. Обновляется само."""
     global _dialog_open
     if _dialog_open:
         return
@@ -142,131 +142,115 @@ def show_status_dialog() -> None:
         _dialog_open = True
         try:
             import tkinter as tk
-            from tkinter import ttk
+
+            BG, CARD, FIELD = "#0B0F1A", "#141B2D", "#0E1424"
+            TEXT, MUTED = "#E6EDF7", "#8A96AD"
+            ACCENT, OK, WARN, BAD, BTN = "#4CC9F0", "#34D399", "#FBBF24", "#F87171", "#222C45"
+            FONT = "Segoe UI"
 
             root = tk.Tk()
-            root.title("Пульт ПК (PhoneV2 Server)")
-            root.geometry("460x360")
+            root.title("Пульт ПК — сервер")
+            root.geometry("520x470")
             root.resizable(False, False)
+            root.configure(bg=BG)
             root.attributes("-topmost", True)
 
-            # Цветовая гамма
-            bg_color = "#1E1E2E"
-            fg_color = "#CDD6F4"
-            card_bg = "#313244"
-            accent_color = "#89B4FA"
-            btn_bg = "#45475A"
+            def label(parent, text, size=9, bold=False, fg=TEXT, bg=None):
+                return tk.Label(parent, text=text, font=(FONT, size, "bold" if bold else "normal"),
+                                fg=fg, bg=bg or parent["bg"])
 
-            root.configure(bg=bg_color)
+            def button(parent, text, cmd, bg=BTN, fg=TEXT, bold=False):
+                return tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg, activebackground=ACCENT,
+                                 activeforeground="#00131A", relief="flat", bd=0, cursor="hand2",
+                                 font=(FONT, 9, "bold" if bold else "normal"), padx=12, pady=5)
 
-            # Заголовок
-            title_lbl = tk.Label(
-                root,
-                text="🖥️ Пульт ПК — Сервер управления",
-                font=("Segoe UI", 13, "bold"),
-                bg=bg_color,
-                fg=accent_color,
-            )
-            title_lbl.pack(pady=(16, 8))
+            # --- шапка ---
+            head = tk.Frame(root, bg=BG)
+            head.pack(fill="x", padx=20, pady=(18, 6))
+            label(head, "⚡ ПУЛЬТ ПК", 17, True, ACCENT).pack(side="left")
+            status_pill = label(head, "● сервер работает", 10, True, OK)
+            status_pill.pack(side="right")
+            label(root, f"Сервер управления · порт {PORT}", 9, False, MUTED).pack(anchor="w", padx=22)
 
-            # Рамка с данными
-            card = tk.Frame(root, bg=card_bg, padx=14, pady=12, relief="flat")
-            card.pack(fill="x", padx=16, pady=6)
+            def card(title):
+                f = tk.Frame(root, bg=CARD, padx=14, pady=10)
+                f.pack(fill="x", padx=20, pady=(10, 0))
+                label(f, title.upper(), 8, True, MUTED).pack(anchor="w")
+                return f
 
-            ips = ", ".join(get_local_ips()) or "127.0.0.1"
-            local_addr = f"http://{ips}:{PORT}"
+            def field_row(parent, value, fg=TEXT, btn_text="Копировать", masked=False):
+                row = tk.Frame(parent, bg=CARD)
+                row.pack(fill="x", pady=(4, 0))
+                var = tk.StringVar(value=("•" * 24) if masked else value)
+                ent = tk.Entry(row, textvariable=var, state="readonly", readonlybackground=FIELD, fg=fg,
+                               relief="flat", font=("Consolas", 10), bd=6)
+                ent.pack(side="left", fill="x", expand=True)
+                state = {"shown": not masked}
 
-            # IP
-            tk.Label(card, text="Локальный адрес Wi-Fi:", font=("Segoe UI", 9, "bold"), bg=card_bg, fg="#A6ADC8").pack(anchor="w")
-            ip_row = tk.Frame(card, bg=card_bg)
-            ip_row.pack(fill="x", pady=(2, 6))
-            ip_entry = tk.Entry(ip_row, font=("Consolas", 10), bg="#181825", fg=fg_color, relief="flat", highlightthickness=1)
-            ip_entry.insert(0, local_addr)
-            ip_entry.config(state="readonly")
-            ip_entry.pack(side="left", fill="x", expand=True)
+                if masked:
+                    def toggle():
+                        state["shown"] = not state["shown"]
+                        var.set(value if state["shown"] else "•" * 24)
+                        eye.config(text="🙈" if state["shown"] else "👁")
+                    eye = button(row, "👁", toggle)
+                    eye.pack(side="right", padx=(6, 0))
+                copy_btn = button(row, btn_text, lambda: _copy_to_clipboard(value), bg=ACCENT, fg="#00131A", bold=True)
+                copy_btn.pack(side="right", padx=(6, 0))
+                return var
 
-            btn_copy_ip = tk.Button(
-                ip_row,
-                text="Копировать",
-                font=("Segoe UI", 8),
-                bg=btn_bg,
-                fg="white",
-                relief="flat",
-                command=lambda: _copy_to_clipboard(local_addr),
-            )
-            btn_copy_ip.pack(side="right", padx=(6, 0))
+            # --- адреса в Wi-Fi ---
+            c1 = card("Адрес в домашней сети (Wi-Fi)")
+            ips = [ip for ip in get_local_ips() if not ip.startswith("169.254.")] or ["127.0.0.1"]
+            for ip in ips:
+                field_row(c1, f"{ip}", fg=TEXT)
 
-            # Токен
-            tk.Label(card, text="Секретный токен доступа:", font=("Segoe UI", 9, "bold"), bg=card_bg, fg="#A6ADC8").pack(anchor="w")
-            tok_row = tk.Frame(card, bg=card_bg)
-            tok_row.pack(fill="x", pady=(2, 6))
-            tok_entry = tk.Entry(tok_row, font=("Consolas", 10), bg="#181825", fg="#A6E3A1", relief="flat", highlightthickness=1)
-            tok_entry.insert(0, TOKEN)
-            tok_entry.config(state="readonly")
-            tok_entry.pack(side="left", fill="x", expand=True)
+            # --- токен ---
+            c2 = card("Секретный токен")
+            field_row(c2, TOKEN, fg=OK, btn_text="Копировать", masked=True)
 
-            btn_copy_tok = tk.Button(
-                tok_row,
-                text="Копировать токен",
-                font=("Segoe UI", 8, "bold"),
-                bg="#A6E3A1",
-                fg="#11111B",
-                relief="flat",
-                command=lambda: _copy_to_clipboard(TOKEN),
-            )
-            btn_copy_tok.pack(side="right", padx=(6, 0))
+            # --- туннель ---
+            c3 = card("Интернет-туннель (вне дома)")
+            tun_state = label(c3, "", 10, True, WARN)
+            tun_state.pack(anchor="w", pady=(4, 0))
+            tun_url = tk.Entry(c3, state="readonly", readonlybackground=FIELD, fg=WARN, relief="flat",
+                               font=("Consolas", 9), bd=6)
+            tun_url.pack(fill="x", pady=(4, 0))
+            url_var = tk.StringVar(value="")
+            tun_url.config(textvariable=url_var)
 
-            # Туннель
-            cf_url = get_cloudflare_url()
-            cf_text = cf_url if is_cloudflare_running() and cf_url else ("Запускается…" if is_cloudflare_running() else "Выключен")
-            tk.Label(card, text="Интернет-туннель (Cloudflare):", font=("Segoe UI", 9, "bold"), bg=card_bg, fg="#A6ADC8").pack(anchor="w")
-            cf_lbl = tk.Label(card, text=cf_text, font=("Consolas", 9), bg=card_bg, fg="#F9E2AF")
-            cf_lbl.pack(anchor="w", pady=(1, 4))
-
-            # Кнопки действий
-            actions = tk.Frame(root, bg=bg_color)
-            actions.pack(fill="x", padx=16, pady=10)
-
-            def _toggle_tunnel():
+            def toggle_tunnel():
                 if is_cloudflare_running():
                     stop_cloudflare_tunnel()
-                    cf_lbl.config(text="Выключен")
                 else:
                     start_cloudflare_tunnel()
-                    cf_lbl.config(text="Запуск туннеля…")
+                refresh()
 
-            btn_tunnel = tk.Button(
-                actions,
-                text="🌐 Вкл/Выкл туннель",
-                font=("Segoe UI", 9),
-                bg=btn_bg,
-                fg="white",
-                relief="flat",
-                command=_toggle_tunnel,
-            )
-            btn_tunnel.pack(side="left", padx=(0, 6))
+            tun_btns = tk.Frame(c3, bg=CARD)
+            tun_btns.pack(fill="x", pady=(8, 0))
+            btn_tun = button(tun_btns, "🌐 Включить", toggle_tunnel, bg=BTN)
+            btn_tun.pack(side="left")
+            button(tun_btns, "Копировать адрес", lambda: _copy_to_clipboard(url_var.get()), bg=BTN).pack(side="left", padx=6)
 
-            btn_logs = tk.Button(
-                actions,
-                text="📁 Открыть папку",
-                font=("Segoe UI", 9),
-                bg=btn_bg,
-                fg="white",
-                relief="flat",
-                command=lambda: os.startfile(BASE_DIR),
-            )
-            btn_logs.pack(side="left", padx=6)
+            def refresh():
+                running = is_cloudflare_running()
+                url = get_cloudflare_url() if running else ""
+                if running and url:
+                    tun_state.config(text="● включён", fg=OK)
+                elif running:
+                    tun_state.config(text="● запускается…", fg=WARN)
+                else:
+                    tun_state.config(text="● выключен", fg=BAD)
+                url_var.set(url or "—")
+                btn_tun.config(text="⛔ Выключить" if running else "🌐 Включить")
+                root.after(1500, refresh)
 
-            btn_close = tk.Button(
-                actions,
-                text="Закрыть",
-                font=("Segoe UI", 9),
-                bg=btn_bg,
-                fg="white",
-                relief="flat",
-                command=root.destroy,
-            )
-            btn_close.pack(side="right")
+            refresh()
+
+            # --- нижние кнопки ---
+            foot = tk.Frame(root, bg=BG)
+            foot.pack(fill="x", padx=20, pady=16)
+            button(foot, "📁 Папка сервера", lambda: os.startfile(BASE_DIR)).pack(side="left")
+            button(foot, "Закрыть", root.destroy).pack(side="right")
 
             root.protocol("WM_DELETE_WINDOW", root.destroy)
             root.mainloop()
