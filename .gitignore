@@ -1,0 +1,10 @@
+# Private server data
+config.json
+tunnel_url.txt
+server.log*
+updates/
+photos/
+*.apk
+*.part
+__pycache__/
+*.pyc
