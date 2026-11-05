@@ -11,7 +11,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .config import (
     PORT,
@@ -42,15 +42,79 @@ __all__ = [
     "find_cloudflared_path",
     "start_network_services",
     "get_cloudflare_url",
+    "start_cloudflare_tunnel",
+    "stop_cloudflare_tunnel",
+    "is_cloudflare_running",
+    "get_tunnel_info",
     "check_paths",
 ]
 
 _cloudflare_url: str = ""
-_cloudflare_proc = None
+_cloudflare_proc: Optional[subprocess.Popen] = None
+_cloudflare_active: bool = False
+_cloudflare_lock = threading.Lock()
+_cloudflare_thread: Optional[threading.Thread] = None
 
 
 def get_cloudflare_url() -> str:
     return _cloudflare_url
+
+
+def is_cloudflare_running() -> bool:
+    global _cloudflare_proc
+    return bool(_cloudflare_proc and _cloudflare_proc.poll() is None)
+
+
+def get_tunnel_info() -> dict:
+    cf_path = find_cloudflared_path()
+    running = is_cloudflare_running()
+    return {
+        "installed": bool(cf_path),
+        "running": running,
+        "url": _cloudflare_url if running else "",
+        "cf_path": cf_path or "",
+    }
+
+
+def stop_cloudflare_tunnel() -> Tuple[bool, str]:
+    global _cloudflare_active, _cloudflare_proc, _cloudflare_url
+    with _cloudflare_lock:
+        _cloudflare_active = False
+        if _cloudflare_proc:
+            try:
+                _cloudflare_proc.terminate()
+                try:
+                    _cloudflare_proc.wait(timeout=2.0)
+                except Exception:
+                    _cloudflare_proc.kill()
+            except Exception as e:
+                log(f"[Cloudflare Tunnel] Ошибка остановки: {e}")
+            _cloudflare_proc = None
+        _cloudflare_url = ""
+        try:
+            url_file = os.path.join(BASE_DIR, "tunnel_url.txt")
+            if os.path.exists(url_file):
+                os.remove(url_file)
+        except Exception:
+            pass
+        log("[Cloudflare Tunnel] Туннель остановлен по запросу.")
+        return True, "Туннель остановлен"
+
+
+def start_cloudflare_tunnel() -> Tuple[bool, str]:
+    global _cloudflare_active, _cloudflare_thread
+    with _cloudflare_lock:
+        if is_cloudflare_running():
+            return True, _cloudflare_url or "Туннель уже запущен"
+        cf_path = find_cloudflared_path()
+        if not cf_path:
+            return False, "cloudflared.exe не найден на ПК"
+        _cloudflare_active = True
+        if not _cloudflare_thread or not _cloudflare_thread.is_alive():
+            _cloudflare_thread = threading.Thread(target=_cloudflared_worker_loop, daemon=True)
+            _cloudflare_thread.start()
+        log("[Cloudflare Tunnel] Запуск интернет-туннеля по запросу…")
+        return True, "Запуск интернет-туннеля…" 
 
 
 def check_paths() -> None:
@@ -175,7 +239,7 @@ def find_cloudflared_path() -> Optional[str]:
     return None
 
 
-def _cloudflared_worker() -> None:
+def _cloudflared_worker_loop() -> None:
     global _cloudflare_url, _cloudflare_proc
     cf_path = find_cloudflared_path()
     if not cf_path:
@@ -200,7 +264,7 @@ def _cloudflared_worker() -> None:
     log(f"[Cloudflare Tunnel] Запуск автоматического интернет-туннеля для порта {PORT}…")
 
     url_regex = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
-    while True:
+    while _cloudflare_active:
         try:
             cmd = [cf_path, "tunnel", "--url", f"http://127.0.0.1:{PORT}"]
             creationflags = 0x08000000 if IS_WINDOWS else 0
@@ -216,6 +280,8 @@ def _cloudflared_worker() -> None:
             )
 
             for line in _cloudflare_proc.stdout:
+                if not _cloudflare_active:
+                    break
                 match = url_regex.search(line)
                 if match:
                     found_url = match.group(0)
@@ -378,7 +444,9 @@ def _watch_server_file_and_restart() -> None:
 
 
 def start_network_services() -> None:
-    """Запускает фоновые сетевые потоки: отслеживание файлов, UDP-мышь, Cloudflare туннель."""
+    """Запускает фоновые сетевые потоки: отслеживание файлов, UDP-мышь, Cloudflare туннель (по требованию/автозапуску)."""
     threading.Thread(target=_watch_server_file_and_restart, daemon=True).start()
     threading.Thread(target=_udp_mouse_worker, daemon=True).start()
-    threading.Thread(target=_cloudflared_worker, daemon=True).start()
+    from .config import CFG
+    if CFG.get("tunnel_autostart", False):
+        start_cloudflare_tunnel()

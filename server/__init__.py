@@ -18,6 +18,10 @@ from .network import (
     get_local_ips,
     check_paths,
     get_cloudflare_url,
+    start_cloudflare_tunnel,
+    stop_cloudflare_tunnel,
+    is_cloudflare_running,
+    get_tunnel_info,
 )
 
 __all__ = [
@@ -38,4 +42,8 @@ __all__ = [
     "get_local_ips",
     "check_paths",
     "get_cloudflare_url",
+    "start_cloudflare_tunnel",
+    "stop_cloudflare_tunnel",
+    "is_cloudflare_running",
+    "get_tunnel_info",
 ]

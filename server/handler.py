@@ -52,7 +52,13 @@ from .system_info import (
 )
 from .files import browse_files, handle_media_upload, is_safe_path
 from .ota import get_latest_apk_info
-from .network import get_cloudflare_url
+from .network import (
+    get_cloudflare_url,
+    start_cloudflare_tunnel,
+    stop_cloudflare_tunnel,
+    is_cloudflare_running,
+    get_tunnel_info,
+)
 from .media_keys import send_media_key
 from .input import handle_mouse, handle_type_text
 
@@ -134,6 +140,10 @@ class Handler(BaseHTTPRequestHandler):
                 }, ensure_ascii=False),
                 "application/json"
             )
+
+        if path == "/api/tunnel":
+            info = get_tunnel_info()
+            return self._reply(200, json.dumps(info, ensure_ascii=False), "application/json")
 
         # Сопряжение в 1 клик для локальной сети Wi-Fi (выдача токена приложению без ручного ввода на ПК)
         if path in ("/api/pair", "/pair"):
@@ -339,6 +349,21 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return self._reply(401, "unauthorized")
         path = urlparse(self.path).path
+
+        if path == "/api/tunnel/start":
+            ok, msg = start_cloudflare_tunnel()
+            return self._reply(200 if ok else 400, json.dumps({"ok": ok, "message": msg, "info": get_tunnel_info()}, ensure_ascii=False), "application/json")
+
+        if path == "/api/tunnel/stop":
+            ok, msg = stop_cloudflare_tunnel()
+            return self._reply(200, json.dumps({"ok": ok, "message": msg, "info": get_tunnel_info()}, ensure_ascii=False), "application/json")
+
+        if path == "/api/tunnel/toggle":
+            if is_cloudflare_running():
+                ok, msg = stop_cloudflare_tunnel()
+            else:
+                ok, msg = start_cloudflare_tunnel()
+            return self._reply(200 if ok else 400, json.dumps({"ok": ok, "message": msg, "info": get_tunnel_info()}, ensure_ascii=False), "application/json")
 
         # Загрузка фото со смартфона напрямую на диск
         if path == "/upload/media":
