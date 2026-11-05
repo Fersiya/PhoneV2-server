@@ -263,7 +263,7 @@ def _cloudflared_worker_loop() -> None:
             pass
     log(f"[Cloudflare Tunnel] Запуск автоматического интернет-туннеля для порта {PORT}…")
 
-    url_regex = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
+    url_regex = re.compile(r"https://(?!api\.)[a-zA-Z0-9-]+\.trycloudflare\.com")
     while _cloudflare_active:
         try:
             cmd = [cf_path, "tunnel", "--url", f"http://127.0.0.1:{PORT}"]
