@@ -81,6 +81,9 @@ def _is_local_request(client_ip: str) -> bool:
         return False
 
 
+_TAILSCALE_NET = ipaddress.ip_network("100.64.0.0/10")
+
+
 def is_valid_host_header(host_hdr: str, client_ip: str = "") -> bool:
     """Защита от атак DNS Rebinding: проверка допустимости заголовка Host."""
     host_hdr = (host_hdr or "").strip()
@@ -99,12 +102,13 @@ def is_valid_host_header(host_hdr: str, client_ip: str = "") -> bool:
     host_lower = host.lower()
     if host_lower in ("localhost", "127.0.0.1", "::1"):
         return True
-    if host_lower.endswith(".trycloudflare.com"):
+    if host_lower.endswith((".trycloudflare.com", ".ts.net", ".local")):
         return True
 
     try:
         ip = ipaddress.ip_address(host)
-        if ip.is_private or ip.is_loopback or ip.is_link_local:
+        # 100.64.0.0/10 — адреса Tailscale (Python не считает их private)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip in _TAILSCALE_NET:
             return True
     except ValueError:
         pass

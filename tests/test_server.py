@@ -117,6 +117,10 @@ class ServerTunnelTestCase(unittest.TestCase):
 class ServerDnsRebindingTestCase(unittest.TestCase):
     def test_localhost_valid(self):
         self.assertTrue(is_valid_host_header("localhost"))
+        # Tailscale: IP из 100.64.0.0/10 и MagicDNS-имена (раньше отклонялись -> приложение не подключалось)
+        self.assertTrue(is_valid_host_header("100.101.102.103:8765"))
+        self.assertTrue(is_valid_host_header("my-pc.tail1234.ts.net:8765"))
+        self.assertFalse(is_valid_host_header("evil.example.com"))
         self.assertTrue(is_valid_host_header("localhost:8765"))
         self.assertTrue(is_valid_host_header("127.0.0.1"))
         self.assertTrue(is_valid_host_header("127.0.0.1:8765"))
