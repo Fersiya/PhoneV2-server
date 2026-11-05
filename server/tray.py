@@ -74,9 +74,26 @@ if IS_WINDOWS:
             ("hBalloonIcon", wintypes.HICON),
         ]
 
+    LRESULT = ctypes.c_ssize_t
     WNDPROC = ctypes.WINFUNCTYPE(
-        ctypes.c_long, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
+        LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
     )
+    user32.DefWindowProcW.argtypes = [
+        wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
+    ]
+    user32.DefWindowProcW.restype = LRESULT
+    user32.TrackPopupMenu.argtypes = [
+        wintypes.HMENU, wintypes.UINT, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.HWND, ctypes.c_void_p
+    ]
+    user32.TrackPopupMenu.restype = wintypes.UINT
+    user32.PostQuitMessage.argtypes = [ctypes.c_int]
+    user32.PostQuitMessage.restype = None
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.SetForegroundWindow.restype = wintypes.BOOL
+    user32.DestroyMenu.argtypes = [wintypes.HMENU]
+    user32.DestroyMenu.restype = wintypes.BOOL
+    shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD, ctypes.c_void_p]
+    shell32.Shell_NotifyIconW.restype = wintypes.BOOL
 
     class WNDCLASSW(ctypes.Structure):
         _fields_ = [
