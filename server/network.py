@@ -438,5 +438,5 @@ def start_network_services() -> None:
     threading.Thread(target=_watch_server_file_and_restart, daemon=True).start()
     threading.Thread(target=_udp_mouse_worker, daemon=True).start()
     from .config import CFG
-    if CFG.get("tunnel_autostart", False):
+    if CFG.get("tunnel_autostart", True):
         start_cloudflare_tunnel()
