@@ -33,6 +33,8 @@ from .input import (
     MOUSEEVENTF_LEFTUP,
     MOUSEEVENTF_RIGHTDOWN,
     MOUSEEVENTF_RIGHTUP,
+    MOUSEEVENTF_MIDDLEDOWN,
+    MOUSEEVENTF_MIDDLEUP,
     KEYEVENTF_KEYUP,
 )
 
@@ -401,6 +403,8 @@ def _udp_mouse_worker() -> None:
                     _send_inputs([_mouse_input(flags=MOUSEEVENTF_LEFTDOWN), _mouse_input(flags=MOUSEEVENTF_LEFTUP)])
                 elif args == "right":
                     _send_inputs([_mouse_input(flags=MOUSEEVENTF_RIGHTDOWN), _mouse_input(flags=MOUSEEVENTF_RIGHTUP)])
+                elif args == "middle":
+                    _send_inputs([_mouse_input(flags=MOUSEEVENTF_MIDDLEDOWN), _mouse_input(flags=MOUSEEVENTF_MIDDLEUP)])
                 elif args == "double":
                     c = [_mouse_input(flags=MOUSEEVENTF_LEFTDOWN), _mouse_input(flags=MOUSEEVENTF_LEFTUP)]
                     _send_inputs(c + c)

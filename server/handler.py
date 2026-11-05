@@ -65,6 +65,7 @@ from .input import handle_mouse, handle_type_text
 __all__ = [
     "Handler",
     "PcServer",
+    "is_valid_host_header",
 ]
 
 
@@ -80,6 +81,44 @@ def _is_local_request(client_ip: str) -> bool:
         return False
 
 
+def is_valid_host_header(host_hdr: str, client_ip: str = "") -> bool:
+    """Защита от атак DNS Rebinding: проверка допустимости заголовка Host."""
+    host_hdr = (host_hdr or "").strip()
+    if not host_hdr:
+        return _is_local_request(client_ip)
+
+    if host_hdr.startswith("["):
+        bracket_end = host_hdr.find("]")
+        if bracket_end != -1:
+            host = host_hdr[1:bracket_end]
+        else:
+            host = host_hdr
+    else:
+        host = host_hdr.split(":")[0].strip()
+
+    host_lower = host.lower()
+    if host_lower in ("localhost", "127.0.0.1", "::1"):
+        return True
+    if host_lower.endswith(".trycloudflare.com"):
+        return True
+
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            return True
+    except ValueError:
+        pass
+
+    try:
+        local_hostname = socket.gethostname().lower()
+        if host_lower == local_hostname or host_lower == f"{local_hostname}.local":
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 60
@@ -89,6 +128,9 @@ class Handler(BaseHTTPRequestHandler):
         if ip in ("127.0.0.1", "::1"):  # запрос пришёл через локальный cloudflared
             return self.headers.get("CF-Connecting-IP", ip)
         return ip
+
+    def _is_valid_host(self) -> bool:
+        return is_valid_host_header(self.headers.get("Host", ""), self.client_address[0])
 
     def _authorized(self) -> bool:
         return check_authorized(self._client_ip(), self.headers)
@@ -122,6 +164,8 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(min(length, 2 * 1024 * 1024)).decode("utf-8", errors="replace")
 
     def do_GET(self) -> None:
+        if not self._is_valid_host():
+            return self._reply(400, "Invalid Host header (DNS rebinding protection)\n")
         parsed = urlparse(self.path)
         path = parsed.path
         cloudflare_url = get_cloudflare_url()
@@ -346,6 +390,8 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(404, "not found")
 
     def do_POST(self) -> None:
+        if not self._is_valid_host():
+            return self._reply(400, "Invalid Host header (DNS rebinding protection)\n")
         if not self._authorized():
             return self._reply(401, "unauthorized")
         path = urlparse(self.path).path

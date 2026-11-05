@@ -12,7 +12,7 @@ from server.power import POWER
 from server.media_keys import MEDIA_KEYS, COMBO_KEYS
 from server.ota import get_apk_manifest_version
 from server.auth import _auth_fails, check_authorized
-from server.handler import _is_local_request
+from server.handler import _is_local_request, is_valid_host_header
 from server.network import get_tunnel_info, is_cloudflare_running, stop_cloudflare_tunnel
 
 
@@ -111,6 +111,42 @@ class ServerTunnelTestCase(unittest.TestCase):
         ok, msg = stop_cloudflare_tunnel()
         self.assertTrue(ok)
         self.assertFalse(is_cloudflare_running())
+
+
+
+class ServerDnsRebindingTestCase(unittest.TestCase):
+    def test_localhost_valid(self):
+        self.assertTrue(is_valid_host_header("localhost"))
+        self.assertTrue(is_valid_host_header("localhost:8765"))
+        self.assertTrue(is_valid_host_header("127.0.0.1"))
+        self.assertTrue(is_valid_host_header("127.0.0.1:8765"))
+        self.assertTrue(is_valid_host_header("[::1]:8765"))
+
+    def test_lan_ips_valid(self):
+        self.assertTrue(is_valid_host_header("192.168.0.10:8765"))
+        self.assertTrue(is_valid_host_header("10.0.0.5:8765"))
+        self.assertTrue(is_valid_host_header("172.16.1.2:8765"))
+        self.assertTrue(is_valid_host_header("169.254.1.1:8765"))
+
+    def test_cloudflare_tunnel_valid(self):
+        self.assertTrue(is_valid_host_header("my-demo-tunnel.trycloudflare.com"))
+        self.assertTrue(is_valid_host_header("abc-123.trycloudflare.com:8765"))
+
+    def test_malicious_domains_blocked(self):
+        self.assertFalse(is_valid_host_header("attacker.com"))
+        self.assertFalse(is_valid_host_header("attacker.com:8765"))
+        self.assertFalse(is_valid_host_header("evil-site.org"))
+        self.assertFalse(is_valid_host_header("8.8.8.8"))
+        self.assertFalse(is_valid_host_header("1.1.1.1:8765"))
+        self.assertFalse(is_valid_host_header("malicious.internal.attacker.com"))
+
+
+class ServerTrayModuleTestCase(unittest.TestCase):
+    def test_tray_functions_imported(self):
+        from server import start_tray_thread, show_status_dialog, remove_tray_icon
+        self.assertTrue(callable(start_tray_thread))
+        self.assertTrue(callable(show_status_dialog))
+        self.assertTrue(callable(remove_tray_icon))
 
 
 if __name__ == "__main__":

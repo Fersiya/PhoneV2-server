@@ -12,7 +12,13 @@ from .config import (
     save_config,
     reload_config_if_needed,
 )
-from .handler import Handler, PcServer
+from .handler import Handler, PcServer, is_valid_host_header
+from .tray import (
+    setup_tray_icon,
+    remove_tray_icon,
+    show_status_dialog,
+    start_tray_thread,
+)
 from .network import (
     start_network_services,
     get_local_ips,
@@ -46,4 +52,9 @@ __all__ = [
     "stop_cloudflare_tunnel",
     "is_cloudflare_running",
     "get_tunnel_info",
+    "is_valid_host_header",
+    "setup_tray_icon",
+    "remove_tray_icon",
+    "show_status_dialog",
+    "start_tray_thread",
 ]

@@ -28,6 +28,7 @@ from server import (
     check_paths,
     get_local_ips,
     start_network_services,
+    start_tray_thread,
     Handler,
     PcServer,
 )
@@ -52,6 +53,7 @@ def main() -> None:
     log(f"Сервер слушает порт {PORT}. Токен: {TOKEN}")
 
     start_network_services()
+    start_tray_thread()
 
     try:
         server = PcServer(("0.0.0.0", PORT), Handler)
