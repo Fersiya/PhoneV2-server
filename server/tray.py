@@ -165,7 +165,8 @@ def show_status_dialog() -> None:
             root = tk.Tk()
             root.title("Пульт ПК Хост")
             root.geometry("520x620")
-            root.resizable(False, False)
+            root.resizable(True, True)
+            root.minsize(480, 560)
             root.configure(bg=BG)
             root.attributes("-topmost", True)
             root.after(600, lambda: root.attributes("-topmost", False))
@@ -290,6 +291,7 @@ def show_status_dialog() -> None:
             foot.pack(fill="x", padx=20, pady=16)
             button(foot, "📁 Папка данных", lambda: os.startfile(BASE_DIR)).pack(side="left")
             upd_lbl = label(foot, f"v{VERSION}", 9, False, MUTED)
+            upd_lbl.config(wraplength=300, justify="left")
             upd_lbl.pack(side="left", padx=10)
 
             def check_updates():
@@ -299,11 +301,9 @@ def show_status_dialog() -> None:
                     apk_msg = fetch_latest_apk()
                     root.after(0, lambda: upd_lbl.config(text=f"{msg}. {apk_msg}"))
                     if has:
-                        root.after(0, lambda: btn_upd.config(
-                            text="⬇ Установить",
-                            command=lambda: threading.Thread(
-                                target=lambda: root.after(0, lambda r=install_server_update(): upd_lbl.config(text=r)),
-                                daemon=True).start()))
+                        root.after(0, lambda: upd_lbl.config(text="Устанавливаю новую версию, Хост перезапустится сам…"))
+                        res = install_server_update()
+                        root.after(0, lambda: upd_lbl.config(text=res))
                 threading.Thread(target=work, daemon=True).start()
                 upd_lbl.config(text="Проверяю…")
 

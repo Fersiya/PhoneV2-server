@@ -395,6 +395,7 @@ def _cloudflared_worker_loop() -> None:
     url_regex = re.compile(r"https://(?!api\.)[a-zA-Z0-9-]+\.trycloudflare\.com")
     protocols = ["http2", "quic"]  # сначала TCP (проходит почти везде), если не взлетело — QUIC
     attempt = 0
+    fails = 0
     while _cloudflare_active:
         protocol = protocols[attempt % len(protocols)]
         attempt += 1
@@ -415,9 +416,13 @@ def _cloudflared_worker_loop() -> None:
                 creationflags=creationflags
             )
 
+            started = time.time()
+            tail: List[str] = []
             for line in _cloudflare_proc.stdout:
                 if not _cloudflare_active:
                     break
+                if line.strip():
+                    tail = (tail + [line.strip()])[-6:]
                 match = url_regex.search(line)
                 if match:
                     found_url = match.group(0)
@@ -440,9 +445,20 @@ def _cloudflared_worker_loop() -> None:
                         print("=" * 70 + "\n")
             _cloudflare_proc.wait()
             _cloudflare_url = ""
+            if _cloudflare_active:
+                lived = time.time() - started
+                log(f"[Cloudflare Tunnel] cloudflared завершился через {lived:.0f} с (код {_cloudflare_proc.returncode}). Последние строки:")
+                for ln in tail:
+                    log("    " + ln[:300])
+                fails = 0 if lived > 120 else fails + 1
         except Exception as e:
             log(f"[Cloudflare Tunnel] Ошибка процесса: {e}")
-        time.sleep(3)
+            fails += 1
+        # Пауза растёт при повторных сбоях (до 2 минут), чтобы не спамить и не долбить Cloudflare
+        for _ in range(min(120, 3 * 2 ** min(fails, 5))):
+            if not _cloudflare_active:
+                break
+            time.sleep(1)
 
 
 def _udp_mouse_worker() -> None:

@@ -115,16 +115,32 @@ def check_server_update() -> Tuple[bool, str]:
 
 def install_server_update() -> str:
     """Скачивает установщик из релиза и запускает его тихо. Работает только в установленной версии."""
-    if not FROZEN:
-        return "Автообновление сервера работает только в установленной версии (PCControl-Setup.exe)"
     has, msg = check_server_update()
-    if not has or not _status["server_url"]:
+    if not has:
+        return msg
+    if not FROZEN:
+        # Запуск из исходников: обновляемся через git и перезапускаемся
+        from .config import BASE_DIR, restart_command
+        if not os.path.isdir(os.path.join(BASE_DIR, ".git")):
+            return "Запуск из исходников без git: скачайте новый PCControl-Setup.exe из релиза"
+        try:
+            r = subprocess.run(["git", "pull", "--ff-only", "origin", "main"], cwd=BASE_DIR, capture_output=True,
+                               text=True, timeout=120, creationflags=0x08000000 if os.name == "nt" else 0)
+            if r.returncode != 0:
+                return "git pull не удался: " + (r.stderr or r.stdout).strip()[-200:]
+            log("[Updates] Код обновлён через git, перезапуск…")
+            subprocess.Popen(restart_command(), cwd=BASE_DIR, creationflags=DETACHED_FLAGS)
+            threading.Timer(1.0, lambda: os._exit(0)).start()
+            return "Обновлено, перезапускаюсь…"
+        except Exception as e:
+            return f"Не удалось обновить: {e}"
+    if not _status["server_url"]:
         return msg
     try:
         dest = os.path.join(tempfile.gettempdir(), "PCControl-Setup.exe")
         _download(_status["server_url"], dest)
         log("[Updates] Запуск установщика новой версии сервера…")
-        subprocess.Popen([dest, "/SILENT", "/NORESTART", "/CLOSEAPPLICATIONS"], creationflags=DETACHED_FLAGS)
+        subprocess.Popen([dest, "/SILENT", "/NORESTART", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"], creationflags=DETACHED_FLAGS)
         return "Устанавливаю обновление, сервер перезапустится…"
     except Exception as e:
         return f"Не удалось обновить сервер: {e}"
