@@ -13,7 +13,9 @@ import threading
 import time
 from typing import Optional
 
-from .config import BASE_DIR, PORT, TOKEN, IS_WINDOWS, log
+from .config import BASE_DIR, PORT, TOKEN, IS_WINDOWS, log, restart_command
+from .auth import open_pairing, pairing_seconds_left
+from .version import VERSION
 from .network import (
     get_local_ips,
     get_cloudflare_url,
@@ -150,7 +152,7 @@ def show_status_dialog() -> None:
 
             root = tk.Tk()
             root.title("Пульт ПК — сервер")
-            root.geometry("520x470")
+            root.geometry("520x620")
             root.resizable(False, False)
             root.configure(bg=BG)
             root.attributes("-topmost", True)
@@ -204,8 +206,16 @@ def show_status_dialog() -> None:
             for ip in ips:
                 field_row(c1, f"{ip}", fg=TEXT)
 
+            # --- сопряжение с телефоном ---
+            open_pairing(300)  # пока окно открыто, телефон в домашней сети может получить токен кнопкой
+            c0 = card("Подключение телефона")
+            pair_lbl = label(c0, "", 10, True, OK)
+            pair_lbl.pack(anchor="w", pady=(4, 0))
+            label(c0, "В приложении: Опции → «Найти ПК в сети Wi-Fi»", 9, False, MUTED).pack(anchor="w", pady=(2, 0))
+            button(c0, "🔓 Продлить на 5 минут", lambda: open_pairing(300), bg=BTN).pack(anchor="w", pady=(6, 0))
+
             # --- токен ---
-            c2 = card("Секретный токен")
+            c2 = card("Секретный токен (вручную)")
             field_row(c2, TOKEN, fg=OK, btn_text="Копировать", masked=True)
 
             # --- туннель ---
@@ -232,6 +242,11 @@ def show_status_dialog() -> None:
             button(tun_btns, "Копировать адрес", lambda: _copy_to_clipboard(url_var.get()), bg=BTN).pack(side="left", padx=6)
 
             def refresh():
+                left = pairing_seconds_left()
+                if left > 0:
+                    pair_lbl.config(text=f"🔓 Сопряжение открыто ещё {left // 60}:{left % 60:02d}", fg=OK)
+                else:
+                    pair_lbl.config(text="🔒 Сопряжение закрыто", fg=MUTED)
                 running = is_cloudflare_running()
                 url = get_cloudflare_url() if running else ""
                 if running and url:
@@ -250,6 +265,26 @@ def show_status_dialog() -> None:
             foot = tk.Frame(root, bg=BG)
             foot.pack(fill="x", padx=20, pady=16)
             button(foot, "📁 Папка сервера", lambda: os.startfile(BASE_DIR)).pack(side="left")
+            upd_lbl = label(foot, f"v{VERSION}", 9, False, MUTED)
+            upd_lbl.pack(side="left", padx=10)
+
+            def check_updates():
+                from .updates import check_server_update, install_server_update, fetch_latest_apk
+                def work():
+                    has, msg = check_server_update()
+                    apk_msg = fetch_latest_apk()
+                    root.after(0, lambda: upd_lbl.config(text=f"{msg}. {apk_msg}"))
+                    if has:
+                        root.after(0, lambda: btn_upd.config(
+                            text="⬇ Установить",
+                            command=lambda: threading.Thread(
+                                target=lambda: root.after(0, lambda r=install_server_update(): upd_lbl.config(text=r)),
+                                daemon=True).start()))
+                threading.Thread(target=work, daemon=True).start()
+                upd_lbl.config(text="Проверяю…")
+
+            btn_upd = button(foot, "⬆ Обновления", check_updates)
+            btn_upd.pack(side="left")
             button(foot, "Закрыть", root.destroy).pack(side="right")
 
             root.protocol("WM_DELETE_WINDOW", root.destroy)
@@ -278,6 +313,8 @@ def _tray_window_proc(hwnd, msg, wparam, lparam):
             cf_running = is_cloudflare_running()
             tunnel_item = "🌐 Остановить Cloudflare Tunnel" if cf_running else "🌐 Включить Cloudflare Tunnel"
             user32.AppendMenuW(hmenu, MF_STRING, 2, tunnel_item)
+            user32.AppendMenuW(hmenu, MF_STRING, 6, "🔓 Разрешить сопряжение телефона (5 мин)")
+            user32.AppendMenuW(hmenu, MF_STRING, 7, "⬆️ Проверить обновления")
             user32.AppendMenuW(hmenu, MF_STRING, 3, "📁 Открыть папку сервера и логов")
             user32.AppendMenuW(hmenu, MF_STRING, 4, "🔄 Перезапустить сервер")
             user32.AppendMenuW(hmenu, MF_SEPARATOR, 0, None)
@@ -297,14 +334,16 @@ def _tray_window_proc(hwnd, msg, wparam, lparam):
                     stop_cloudflare_tunnel()
                 else:
                     start_cloudflare_tunnel()
+            elif cmd == 6:
+                open_pairing(300)
+            elif cmd == 7:
+                show_status_dialog()
             elif cmd == 3:
                 os.startfile(BASE_DIR)
             elif cmd == 4:
                 log("[Tray] Перезапуск сервера по запросу из трея...")
                 time.sleep(0.5)
-                py_exe = sys.executable
-                script = os.path.join(BASE_DIR, "server.py")
-                cmd_line = [py_exe, script] + sys.argv[1:]
+                cmd_line = restart_command()
                 from .config import DETACHED_FLAGS
                 import subprocess
                 subprocess.Popen(cmd_line, cwd=BASE_DIR, creationflags=DETACHED_FLAGS)

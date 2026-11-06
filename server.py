@@ -1,4 +1,4 @@
-"""Сервер управления ПК (Windows 11).
+"""Сервер управления ПК (Windows 10/11).
 
 Запуск в консоли:       python server.py
 Проверка и инфо:        python server.py --init
@@ -32,6 +32,8 @@ from server import (
     Handler,
     PcServer,
 )
+from server.version import VERSION
+from server.updates import start_github_updates
 
 
 def main() -> None:
@@ -45,15 +47,20 @@ def main() -> None:
     check_paths()
     local_ips = ", ".join(get_local_ips()) or "127.0.0.1"
     print("\n" + "=" * 70)
-    print("  [*] ПУЛЬТ ПК v6.0 — СЕРВЕР ЗАПУЩЕН И ГОТОВ К РАБОТЕ")
+    print(f"  [*] ПУЛЬТ ПК, сервер {VERSION} — ЗАПУЩЕН И ГОТОВ К РАБОТЕ")
     print("=" * 70)
     print(f"  [+] СЕКРЕТНЫЙ ТОКЕН:  {TOKEN}")
     print(f"  [+] ЛОКАЛЬНЫЙ WI-FI:   http://{local_ips}:{PORT}")
     print("=" * 70 + "\n")
-    log(f"Сервер слушает порт {PORT}. Токен: {TOKEN}")
+    log(f"Сервер {VERSION} слушает порт {PORT} (токен в логах не пишется)")
 
+    from server.auth import open_pairing
+    from server.config import CFG
+    if not CFG.get("paired"):
+        open_pairing(900)  # первый запуск: 15 минут на подключение первого телефона
     start_network_services()
     start_tray_thread()
+    start_github_updates()
 
     try:
         server = PcServer(("0.0.0.0", PORT), Handler)

@@ -9,7 +9,34 @@ from .config import TOKEN, reload_config_if_needed, log
 __all__ = [
     "check_authorized",
     "check_token",
+    "open_pairing",
+    "close_pairing",
+    "pairing_seconds_left",
+    "is_pairing_open",
 ]
+
+_pairing_until = 0.0  # до какого момента ПК согласен выдать токен новому телефону
+
+
+def open_pairing(seconds: int = 300) -> None:
+    """Открывает окно сопряжения: в этот момент телефон в домашней сети может получить токен без ввода."""
+    global _pairing_until
+    _pairing_until = time.time() + seconds
+    log(f"[Pairing] Сопряжение открыто на {seconds // 60} мин.")
+
+
+def close_pairing() -> None:
+    global _pairing_until
+    _pairing_until = 0.0
+
+
+def pairing_seconds_left() -> int:
+    return max(0, int(_pairing_until - time.time()))
+
+
+def is_pairing_open() -> bool:
+    return time.time() < _pairing_until
+
 
 _auth_lock = threading.Lock()
 _auth_fails: Dict[str, Tuple[int, float, float]] = {}  # ip -> (число ошибок, блок до, начало окна)

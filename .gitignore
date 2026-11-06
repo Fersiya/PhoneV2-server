@@ -8,3 +8,7 @@ photos/
 *.part
 __pycache__/
 *.pyc
+build/
+dist/
+dist-installer/
+*.spec

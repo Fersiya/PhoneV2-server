@@ -213,11 +213,26 @@ class Handler(BaseHTTPRequestHandler):
                     }, ensure_ascii=False),
                     "application/json"
                 )
+            from .auth import is_pairing_open, close_pairing
+            if not is_pairing_open():
+                log(f"[Pairing] {client_ip} просил токен, но сопряжение закрыто")
+                return self._reply(
+                    403,
+                    json.dumps({
+                        "status": "closed",
+                        "message": "Сопряжение закрыто. На ПК дважды щёлкните значок «Пульт ПК» у часов и повторите"
+                    }, ensure_ascii=False),
+                    "application/json"
+                )
             reload_config_if_needed()
             from . import config
             tok = config.TOKEN
             pc_name = socket.gethostname() or "ПК"
             log(f"[Pairing] Телефон ({client_ip}) запросил токен сопряжения. Токен успешно выдан.")
+            close_pairing()
+            if not config.CFG.get("paired"):
+                config.CFG["paired"] = True
+                config.save_config(config.CFG)
             return self._reply(
                 200,
                 json.dumps({

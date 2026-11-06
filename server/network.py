@@ -17,6 +17,7 @@ from .config import (
     PORT,
     TOKEN,
     BASE_DIR,
+    APP_DIR,
     APP_LIST,
     IS_WINDOWS,
     DETACHED_FLAGS,
@@ -211,6 +212,7 @@ def find_cloudflared_path() -> Optional[str]:
 
     candidates = [
         os.path.join(BASE_DIR, "cloudflared.exe"),
+        os.path.join(APP_DIR, "cloudflared.exe"),
         os.path.join(BASE_DIR, "cloudflared-windows-amd64.exe"),
         os.path.expandvars(r"%ProgramFiles%\Cloudflare\cloudflared\cloudflared.exe"),
         os.path.expandvars(r"%ProgramFiles(x86)%\Cloudflare\cloudflared\cloudflared.exe"),
@@ -239,6 +241,28 @@ def find_cloudflared_path() -> Optional[str]:
     return None
 
 
+def _tunnel_selfcheck(url: str, proc) -> None:
+    """Через 40 секунд проверяет, что адрес туннеля реально отвечает; если нет — перезапускает cloudflared
+    (следующая попытка пойдёт по другому протоколу). Ошибка 530 на телефоне = адрес выдан, а соединения нет."""
+    deadline = time.time() + 40
+    while time.time() < deadline and _cloudflare_active and proc.poll() is None:
+        try:
+            req = urllib.request.Request(url + "/ping", headers={"User-Agent": "pccontrol-selfcheck"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                if r.status == 200:
+                    log(f"[Cloudflare Tunnel] Самопроверка пройдена: {url} отвечает")
+                    return
+        except Exception:
+            pass
+        time.sleep(4)
+    if _cloudflare_active and proc.poll() is None:
+        log("[Cloudflare Tunnel] Адрес не отвечает за 40 секунд (провайдер режет соединение?) — перезапуск другим протоколом")
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+
 def _cloudflared_worker_loop() -> None:
     global _cloudflare_url, _cloudflare_proc
     cf_path = find_cloudflared_path()
@@ -264,9 +288,14 @@ def _cloudflared_worker_loop() -> None:
     log(f"[Cloudflare Tunnel] Запуск автоматического интернет-туннеля для порта {PORT}…")
 
     url_regex = re.compile(r"https://(?!api\.)[a-zA-Z0-9-]+\.trycloudflare\.com")
+    protocols = ["http2", "quic"]  # сначала TCP (проходит почти везде), если не взлетело — QUIC
+    attempt = 0
     while _cloudflare_active:
+        protocol = protocols[attempt % len(protocols)]
+        attempt += 1
         try:
-            cmd = [cf_path, "tunnel", "--url", f"http://127.0.0.1:{PORT}"]
+            log(f"[Cloudflare Tunnel] Запуск cloudflared (протокол {protocol})…")
+            cmd = [cf_path, "tunnel", "--no-autoupdate", "--protocol", protocol, "--url", f"http://127.0.0.1:{PORT}"]
             creationflags = 0x08000000 if IS_WINDOWS else 0
             _cloudflare_proc = subprocess.Popen(
                 cmd,
@@ -287,6 +316,7 @@ def _cloudflared_worker_loop() -> None:
                     found_url = match.group(0)
                     if found_url != _cloudflare_url:
                         _cloudflare_url = found_url
+                        threading.Thread(target=_tunnel_selfcheck, args=(found_url, _cloudflare_proc), daemon=True).start()
                         try:
                             with open(os.path.join(BASE_DIR, "tunnel_url.txt"), "w", encoding="utf-8") as f:
                                 f.write(found_url + "\n")
@@ -312,6 +342,7 @@ def _cloudflared_worker_loop() -> None:
                         print("  Tailscale и сторонние VPN на телефоне больше НЕ НУЖНЫ!")
                         print("=" * 70 + "\n")
             _cloudflare_proc.wait()
+            _cloudflare_url = ""
         except Exception as e:
             log(f"[Cloudflare Tunnel] Ошибка процесса: {e}")
         time.sleep(3)
@@ -338,7 +369,7 @@ def _udp_mouse_worker() -> None:
             # Автопоиск ПК в локальной Wi-Fi сети (с автоматической передачей токена для сопряжения в 1 клик)
             if text == "PC_DISCOVERY_PING":
                 pc_name = socket.gethostname() or "ПК"
-                reply = f"PC_DISCOVERY_PONG:{pc_name}:{_cloudflare_url}:{TOKEN}"
+                reply = f"PC_DISCOVERY_PONG:{pc_name}"
                 sock.sendto(reply.encode("utf-8"), addr)
                 continue
 
@@ -400,8 +431,9 @@ def _udp_mouse_worker() -> None:
 
 def _watch_server_file_and_restart() -> None:
     """Отслеживает изменение файлов сервера и автоматически перезапускает процесс."""
+    from .config import FROZEN, restart_command
     script_path = os.path.join(BASE_DIR, "server.py")
-    if not os.path.exists(script_path):
+    if FROZEN or not os.path.exists(script_path):
         return
     try:
         initial_mtime = os.path.getmtime(script_path)
@@ -425,9 +457,7 @@ def _watch_server_file_and_restart() -> None:
 
                 log("Файл server.py был обновлён на диске! Автоматический перезапуск сервера...")
                 time.sleep(0.5)
-                py_exe = sys.executable
-                cmd = [py_exe, script_path] + sys.argv[1:]
-                subprocess.Popen(cmd, cwd=BASE_DIR, creationflags=DETACHED_FLAGS)
+                subprocess.Popen(restart_command(), cwd=BASE_DIR, creationflags=DETACHED_FLAGS)
                 os._exit(0)
         except Exception:
             pass

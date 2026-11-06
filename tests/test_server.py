@@ -182,10 +182,22 @@ class PairingViaTunnelTestCase(unittest.TestCase):
         c.close()
         return r.status
 
-    def test_pair_allowed_locally(self):
-        self.assertEqual(self._pair(), 200)
+    def test_pair_closed_by_default(self):
+        from server.auth import close_pairing
+        close_pairing()
+        self.assertEqual(self._pair(), 403)
+
+    def test_pair_allowed_locally_when_open_and_only_once(self):
+        from unittest import mock
+        from server.auth import open_pairing
+        open_pairing(60)
+        with mock.patch("server.config.save_config"):
+            self.assertEqual(self._pair(), 200)
+        self.assertEqual(self._pair(), 403)  # окно закрылось после выдачи токена
 
     def test_pair_blocked_via_cloudflare_headers(self):
+        from server.auth import open_pairing
+        open_pairing(60)  # даже при открытом окне через туннель токен не отдаётся
         self.assertEqual(self._pair({"CF-Connecting-IP": "203.0.113.5"}), 403)
         self.assertEqual(self._pair({"X-Forwarded-For": "203.0.113.5"}), 403)
 

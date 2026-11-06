@@ -2,6 +2,7 @@
 import json
 import os
 import secrets
+import sys
 import threading
 import time
 from typing import List, Dict, Any
@@ -9,6 +10,9 @@ from typing import List, Dict, Any
 __all__ = [
     "PORT",
     "BASE_DIR",
+    "APP_DIR",
+    "FROZEN",
+    "restart_command",
     "CFG_PATH",
     "LOG_PATH",
     "UPDATES_DIR",
@@ -30,7 +34,26 @@ __all__ = [
 ]
 
 PORT: int = 8765
-BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# FROZEN — собранный установщиком PCControl.exe: программа лежит в Program Files,
+# а настройки, логи и обновления — в %LOCALAPPDATA%\\PCControl (туда можно писать без прав администратора)
+FROZEN: bool = bool(getattr(sys, "frozen", False))
+APP_DIR: str = (
+    os.path.dirname(os.path.abspath(sys.executable)) if FROZEN
+    else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+if FROZEN:
+    BASE_DIR: str = os.path.join(os.environ.get("LOCALAPPDATA", APP_DIR), "PCControl")
+    os.makedirs(BASE_DIR, exist_ok=True)
+else:
+    BASE_DIR = APP_DIR
+
+
+def restart_command() -> list:
+    """Команда для запуска нового экземпляра сервера (из исходников или из установленного exe)."""
+    if FROZEN:
+        return [sys.executable] + sys.argv[1:]
+    return [sys.executable, os.path.join(BASE_DIR, "server.py")] + sys.argv[1:]
+
 CFG_PATH: str = os.path.join(BASE_DIR, "config.json")
 LOG_PATH: str = os.path.join(BASE_DIR, "server.log")
 UPDATES_DIR: str = os.path.join(BASE_DIR, "updates")
@@ -47,9 +70,10 @@ def _get_media_dir() -> str:
                     return custom
     except Exception:
         pass
-    if os.path.exists("D:\\"):
+    if not FROZEN and os.path.exists("D:\\"):
         return r"D:\Photos"
-    return os.path.join(BASE_DIR, "photos")
+    pictures = os.path.join(os.path.expanduser("~"), "Pictures", "PCControl")
+    return pictures if FROZEN else os.path.join(BASE_DIR, "photos")
 
 MEDIA_DIR: str = _get_media_dir()
 try:
