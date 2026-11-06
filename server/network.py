@@ -359,12 +359,9 @@ def _tunnel_selfcheck(url: str, proc) -> None:
         except Exception:
             pass
         time.sleep(4)
-    if _cloudflare_active and proc.poll() is None:
-        log("[Cloudflare Tunnel] Адрес не отвечает за 40 секунд (провайдер режет соединение?) — перезапуск другим протоколом")
-        try:
-            proc.terminate()
-        except Exception:
-            pass
+    # Сам ПК может не открыть свой же туннельный адрес (DNS/провайдер), хотя для телефона он работает —
+    # поэтому туннель не трогаем, только пишем в лог.
+    log("[Cloudflare Tunnel] ПК не смог открыть собственный адрес туннеля (для телефона он может работать)")
 
 
 def _cloudflared_worker_loop() -> None:
@@ -423,11 +420,16 @@ def _cloudflared_worker_loop() -> None:
                     break
                 if line.strip():
                     tail = (tail + [line.strip()])[-6:]
+                if "Registered tunnel connection" in line:
+                    _tunnel_ok = True
+                    if _cloudflare_url:
+                        _publish_tunnel_url(_cloudflare_url)
                 match = url_regex.search(line)
                 if match:
                     found_url = match.group(0)
                     if found_url != _cloudflare_url:
                         _cloudflare_url = found_url
+                        _tunnel_ok = False
                         threading.Thread(target=_tunnel_selfcheck, args=(found_url, _cloudflare_proc), daemon=True).start()
                         try:
                             with open(os.path.join(BASE_DIR, "tunnel_url.txt"), "w", encoding="utf-8") as f:
