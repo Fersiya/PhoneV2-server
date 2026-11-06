@@ -53,6 +53,8 @@ __all__ = [
 _cloudflare_url: str = ""
 _cloudflare_proc: Optional[subprocess.Popen] = None
 _cloudflare_active: bool = False
+_tunnel_ok: bool = False
+_tunnel_protocol: str = ""
 _cloudflare_lock = threading.Lock()
 _cloudflare_thread: Optional[threading.Thread] = None
 
@@ -74,7 +76,106 @@ def get_tunnel_info() -> dict:
         "running": running,
         "url": _cloudflare_url if running else "",
         "cf_path": cf_path or "",
+        "healthy": bool(running and _tunnel_ok),
+        "protocol": _tunnel_protocol if running else "",
     }
+
+
+def _publish_tunnel_url(url: str) -> bool:
+    """Кладёт адрес туннеля в облачный канал ntfy, откуда его берёт телефон вне дома."""
+    try:
+        channel_id = "pcremote_" + hashlib.sha256(TOKEN.encode("utf-8")).hexdigest()[:16]
+        req = urllib.request.Request(
+            f"https://ntfy.sh/{channel_id}",
+            data=url.encode("utf-8"),
+            headers={"Title": "PC Remote Cloudflare", "User-Agent": "curl/7.0"},
+        )
+        urllib.request.urlopen(req, timeout=6)
+        return True
+    except Exception as e:
+        log(f"[Cloudflare Tunnel] Не удалось опубликовать ссылку: {e}")
+        return False
+
+
+def _republish_loop() -> None:
+    """ntfy хранит сообщения ~12 ч, поэтому живой адрес переотправляем каждые 5 минут."""
+    while _cloudflare_active:
+        for _ in range(60):
+            if not _cloudflare_active:
+                return
+            time.sleep(5)
+        if _cloudflare_url and _tunnel_ok:
+            _publish_tunnel_url(_cloudflare_url)
+
+
+def get_pc_mac(local_ip: str = "") -> str:
+    """MAC-адрес сетевой карты ПК (для Wake-on-LAN), по возможности той, у которой адрес local_ip."""
+    if not IS_WINDOWS:
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class IP_ADDR_STRING(ctypes.Structure):
+            pass
+
+        IP_ADDR_STRING._fields_ = [
+            ("Next", ctypes.c_void_p),
+            ("IpAddress", ctypes.c_char * 16),
+            ("IpMask", ctypes.c_char * 16),
+            ("Context", wintypes.DWORD),
+        ]
+
+        class IP_ADAPTER_INFO(ctypes.Structure):
+            pass
+
+        IP_ADAPTER_INFO._fields_ = [
+            ("Next", ctypes.c_void_p),
+            ("ComboIndex", wintypes.DWORD),
+            ("AdapterName", ctypes.c_char * 260),
+            ("Description", ctypes.c_char * 132),
+            ("AddressLength", wintypes.UINT),
+            ("Address", ctypes.c_ubyte * 8),
+            ("Index", wintypes.DWORD),
+            ("Type", wintypes.UINT),
+            ("DhcpEnabled", wintypes.UINT),
+            ("CurrentIpAddress", ctypes.c_void_p),
+            ("IpAddressList", IP_ADDR_STRING),
+            ("GatewayList", IP_ADDR_STRING),
+            ("DhcpServer", IP_ADDR_STRING),
+            ("HaveWins", wintypes.BOOL),
+            ("PrimaryWinsServer", IP_ADDR_STRING),
+            ("SecondaryWinsServer", IP_ADDR_STRING),
+            ("LeaseObtained", ctypes.c_void_p),
+            ("LeaseExpires", ctypes.c_void_p),
+        ]
+
+        size = wintypes.ULONG(0)
+        iph = ctypes.windll.iphlpapi
+        iph.GetAdaptersInfo(None, ctypes.byref(size))
+        buf = ctypes.create_string_buffer(size.value)
+        if iph.GetAdaptersInfo(buf, ctypes.byref(size)) != 0:
+            return ""
+        addr = ctypes.addressof(buf)
+        first = ""
+        while addr:
+            ad = IP_ADAPTER_INFO.from_address(addr)
+            if ad.AddressLength == 6:
+                mac = ":".join(f"{b:02X}" for b in ad.Address[:6])
+                ips = []
+                node = ctypes.addressof(ad.IpAddressList)
+                while node:
+                    s = IP_ADDR_STRING.from_address(node)
+                    ips.append(s.IpAddress.decode("ascii", "ignore"))
+                    node = s.Next
+                if local_ip and local_ip in ips:
+                    return mac
+                if not first and any(i and i != "0.0.0.0" for i in ips):
+                    first = mac
+            addr = ad.Next
+        return first
+    except Exception:
+        return ""
 
 
 def stop_cloudflare_tunnel() -> Tuple[bool, str]:
@@ -250,7 +351,10 @@ def _tunnel_selfcheck(url: str, proc) -> None:
             req = urllib.request.Request(url + "/ping", headers={"User-Agent": "pccontrol-selfcheck"})
             with urllib.request.urlopen(req, timeout=5) as r:
                 if r.status == 200:
+                    global _tunnel_ok
+                    _tunnel_ok = True
                     log(f"[Cloudflare Tunnel] Самопроверка пройдена: {url} отвечает")
+                    _publish_tunnel_url(url)
                     return
         except Exception:
             pass
@@ -264,7 +368,8 @@ def _tunnel_selfcheck(url: str, proc) -> None:
 
 
 def _cloudflared_worker_loop() -> None:
-    global _cloudflare_url, _cloudflare_proc
+    global _cloudflare_url, _cloudflare_proc, _tunnel_ok, _tunnel_protocol
+    threading.Thread(target=_republish_loop, daemon=True).start()
     cf_path = find_cloudflared_path()
     if not cf_path:
         print("\n" + "-" * 60)
@@ -293,6 +398,8 @@ def _cloudflared_worker_loop() -> None:
     while _cloudflare_active:
         protocol = protocols[attempt % len(protocols)]
         attempt += 1
+        _tunnel_ok = False
+        _tunnel_protocol = protocol
         try:
             log(f"[Cloudflare Tunnel] Запуск cloudflared (протокол {protocol})…")
             cmd = [cf_path, "tunnel", "--no-autoupdate", "--protocol", protocol, "--url", f"http://127.0.0.1:{PORT}"]
@@ -322,17 +429,7 @@ def _cloudflared_worker_loop() -> None:
                                 f.write(found_url + "\n")
                         except Exception:
                             pass
-                        try:
-                            channel_id = "pcremote_" + hashlib.sha256(TOKEN.encode("utf-8")).hexdigest()[:16]
-                            sync_req = urllib.request.Request(
-                                f"https://ntfy.sh/{channel_id}",
-                                data=found_url.encode("utf-8"),
-                                headers={"Title": "PC Remote Cloudflare", "User-Agent": "curl/7.0"}
-                            )
-                            urllib.request.urlopen(sync_req, timeout=4)
-                            log(f"[Cloudflare Tunnel] Адрес успешно отправлен в облачный канал {channel_id}")
-                        except Exception as e:
-                            log(f"[Cloudflare Tunnel] Не удалось опубликовать ссылку: {e}")
+                        _publish_tunnel_url(found_url)
                         print("\n" + "=" * 70)
                         log(f"[Cloudflare Tunnel] Внешний интернет-адрес: {found_url}")
                         print("  [*] ВНЕШНИЙ ИНТЕРНЕТ-ТУННЕЛЬ АКТИВЕН (Cloudflare Tunnel):")

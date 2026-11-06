@@ -1,7 +1,7 @@
 """Интеграция с системным треем Windows (System Tray).
 
 Работает без сторонних зависимостей (только чистый WinAPI через ctypes и встроенный tkinter).
-Позволяет пользователю видеть статус сервера, копировать токен в 1 клик,
+Позволяет пользователю видеть статус Хоста, копировать токен в 1 клик,
 управлять Cloudflare туннелем, открывать логи и мягко выходить из приложения.
 """
 import ctypes
@@ -133,6 +133,18 @@ def _copy_to_clipboard(text: str) -> None:
         pass
 
 
+def _icon_path() -> str:
+    """Путь к icon.ico — той же картинке, что на ярлыке и в установщике."""
+    base = getattr(sys, "_MEIPASS", "")
+    cands = [os.path.join(base, "icon.ico") if base else "",
+             os.path.join(BASE_DIR, "installer", "icon.ico"),
+             os.path.join(BASE_DIR, "icon.ico")]
+    for c in cands:
+        if c and os.path.isfile(c):
+            return c
+    return ""
+
+
 def show_status_dialog() -> None:
     """Окно статуса: адреса, токен, интернет-туннель. Обновляется само."""
     global _dialog_open
@@ -151,11 +163,18 @@ def show_status_dialog() -> None:
             FONT = "Segoe UI"
 
             root = tk.Tk()
-            root.title("Пульт ПК — сервер")
+            root.title("Пульт ПК Хост")
             root.geometry("520x620")
             root.resizable(False, False)
             root.configure(bg=BG)
             root.attributes("-topmost", True)
+            root.after(600, lambda: root.attributes("-topmost", False))
+            _ico = _icon_path()
+            if _ico:
+                try:
+                    root.iconbitmap(_ico)
+                except Exception:
+                    pass
 
             def label(parent, text, size=9, bold=False, fg=TEXT, bg=None):
                 return tk.Label(parent, text=text, font=(FONT, size, "bold" if bold else "normal"),
@@ -170,9 +189,9 @@ def show_status_dialog() -> None:
             head = tk.Frame(root, bg=BG)
             head.pack(fill="x", padx=20, pady=(18, 6))
             label(head, "⚡ ПУЛЬТ ПК", 17, True, ACCENT).pack(side="left")
-            status_pill = label(head, "● сервер работает", 10, True, OK)
+            status_pill = label(head, "● Хост работает", 10, True, OK)
             status_pill.pack(side="right")
-            label(root, f"Сервер управления · порт {PORT}", 9, False, MUTED).pack(anchor="w", padx=22)
+            label(root, f"Пульт ПК Хост · порт {PORT}", 9, False, MUTED).pack(anchor="w", padx=22)
 
             def card(title):
                 f = tk.Frame(root, bg=CARD, padx=14, pady=10)
@@ -250,7 +269,12 @@ def show_status_dialog() -> None:
                 running = is_cloudflare_running()
                 url = get_cloudflare_url() if running else ""
                 if running and url:
-                    tun_state.config(text="● включён", fg=OK)
+                    from .network import get_tunnel_info
+                    inf = get_tunnel_info()
+                    if inf.get("healthy"):
+                        tun_state.config(text=f"● работает ({inf.get('protocol', '')}), адрес проверен", fg=OK)
+                    else:
+                        tun_state.config(text="● адрес выдан, проверяю связь…", fg=WARN)
                 elif running:
                     tun_state.config(text="● запускается…", fg=WARN)
                 else:
@@ -264,7 +288,7 @@ def show_status_dialog() -> None:
             # --- нижние кнопки ---
             foot = tk.Frame(root, bg=BG)
             foot.pack(fill="x", padx=20, pady=16)
-            button(foot, "📁 Папка сервера", lambda: os.startfile(BASE_DIR)).pack(side="left")
+            button(foot, "📁 Папка данных", lambda: os.startfile(BASE_DIR)).pack(side="left")
             upd_lbl = label(foot, f"v{VERSION}", 9, False, MUTED)
             upd_lbl.pack(side="left", padx=10)
 
@@ -315,8 +339,8 @@ def _tray_window_proc(hwnd, msg, wparam, lparam):
             user32.AppendMenuW(hmenu, MF_STRING, 2, tunnel_item)
             user32.AppendMenuW(hmenu, MF_STRING, 6, "🔓 Разрешить сопряжение телефона (5 мин)")
             user32.AppendMenuW(hmenu, MF_STRING, 7, "⬆️ Проверить обновления")
-            user32.AppendMenuW(hmenu, MF_STRING, 3, "📁 Открыть папку сервера и логов")
-            user32.AppendMenuW(hmenu, MF_STRING, 4, "🔄 Перезапустить сервер")
+            user32.AppendMenuW(hmenu, MF_STRING, 3, "📁 Открыть папку данных и логов")
+            user32.AppendMenuW(hmenu, MF_STRING, 4, "🔄 Перезапустить Хост")
             user32.AppendMenuW(hmenu, MF_SEPARATOR, 0, None)
             user32.AppendMenuW(hmenu, MF_STRING, 5, "❌ Выход")
 
@@ -341,7 +365,7 @@ def _tray_window_proc(hwnd, msg, wparam, lparam):
             elif cmd == 3:
                 os.startfile(BASE_DIR)
             elif cmd == 4:
-                log("[Tray] Перезапуск сервера по запросу из трея...")
+                log("[Tray] Перезапуск Хоста по запросу из трея...")
                 time.sleep(0.5)
                 cmd_line = restart_command()
                 from .config import DETACHED_FLAGS
@@ -350,7 +374,7 @@ def _tray_window_proc(hwnd, msg, wparam, lparam):
                 remove_tray_icon()
                 os._exit(0)
             elif cmd == 5:
-                log("[Tray] Завершение работы сервера по запросу пользователя.")
+                log("[Tray] Завершение работы Хоста по запросу пользователя.")
                 stop_cloudflare_tunnel()
                 remove_tray_icon()
                 os._exit(0)
@@ -390,7 +414,16 @@ def setup_tray_icon() -> bool:
             return False
 
         _tray_hwnd = hwnd
-        hicon = user32.LoadIconW(0, IDI_APPLICATION)
+        hicon = None
+        _ico = _icon_path()
+        if _ico:
+            try:
+                user32.LoadImageW.restype = wintypes.HANDLE
+                hicon = user32.LoadImageW(None, _ico, 1, 0, 0, 0x10 | 0x40)  # IMAGE_ICON, LR_LOADFROMFILE|LR_DEFAULTSIZE
+            except Exception:
+                hicon = None
+        if not hicon:
+            hicon = user32.LoadIconW(0, IDI_APPLICATION)
 
         nid = NOTIFYICONDATAW()
         nid.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
@@ -399,7 +432,7 @@ def setup_tray_icon() -> bool:
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP
         nid.uCallbackMessage = WM_TRAY
         nid.hIcon = hicon
-        nid.szTip = f"Пульт ПК v6.0 (Порт {PORT})"
+        nid.szTip = f"Пульт ПК Хост {VERSION} · порт {PORT}"
 
         shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid))
         _tray_nid = nid

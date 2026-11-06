@@ -58,6 +58,7 @@ from .network import (
     stop_cloudflare_tunnel,
     is_cloudflare_running,
     get_tunnel_info,
+    get_pc_mac,
 )
 from .media_keys import send_media_key
 from .input import handle_mouse, handle_type_text
@@ -196,6 +197,14 @@ class Handler(BaseHTTPRequestHandler):
                 "application/json"
             )
 
+        if path == "/api/show_window":
+            # Повторный запуск программы просит уже работающий экземпляр показать окно (только с этого же ПК)
+            if self.client_address[0] in ("127.0.0.1", "::1") and not self._via_proxy():
+                from .tray import show_status_dialog
+                show_status_dialog()
+                return self._reply(200, "ok\n")
+            return self._reply(403, "forbidden\n")
+
         if path == "/api/tunnel":
             info = get_tunnel_info()
             return self._reply(200, json.dumps(info, ensure_ascii=False), "application/json")
@@ -239,6 +248,7 @@ class Handler(BaseHTTPRequestHandler):
                     "status": "ok",
                     "token": tok,
                     "pc": pc_name,
+                    "mac": get_pc_mac(self.connection.getsockname()[0]),
                     "tunnel": cloudflare_url
                 }, ensure_ascii=False),
                 "application/json"

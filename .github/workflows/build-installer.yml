@@ -25,7 +25,7 @@ jobs:
       - name: Сборка exe (PyInstaller)
         run: |
           pip install pyinstaller
-          pyinstaller --noconfirm --clean --onedir --noconsole --name PCControl --icon installer/icon.ico --hidden-import tkinter server.py
+          pyinstaller --noconfirm --clean --onedir --noconsole --name PCControl --icon installer/icon.ico --add-data "installer/icon.ico;." --hidden-import tkinter server.py
 
       - name: "Проверка собранного сервера (запуск и ping)"
         shell: pwsh
@@ -66,4 +66,4 @@ jobs:
             Write-Host "Релиз $tag уже есть — поднимите VERSION в server/version.py для нового"
             exit 0
           }
-          gh release create $tag dist-installer/PCControl-Setup.exe --title "Пульт ПК — сервер $tag" --notes "Установщик для Windows. Скачайте PCControl-Setup.exe и запустите."
+          gh release create $tag dist-installer/PCControl-Setup.exe --title "Пульт ПК Хост $tag" --notes "Установщик для Windows. Скачайте PCControl-Setup.exe и запустите."

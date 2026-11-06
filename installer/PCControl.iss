@@ -38,7 +38,7 @@ Source: "..\dist\PCControl\*"; DestDir: "{app}"; Flags: ignoreversion recursesub
 [Icons]
 Name: "{group}\Пульт ПК"; Filename: "{app}\PCControl.exe"
 Name: "{group}\Удалить Пульт ПК"; Filename: "{uninstallexe}"
-Name: "{commonstartup}\Пульт ПК"; Filename: "{app}\PCControl.exe"; Tasks: autostart
+Name: "{commonstartup}\Пульт ПК"; Filename: "{app}\PCControl.exe"; Parameters: "--minimized"; Tasks: autostart
 Name: "{autodesktop}\Пульт ПК"; Filename: "{app}\PCControl.exe"; Tasks: desktopicon
 
 [Run]
