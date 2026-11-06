@@ -7,7 +7,7 @@
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/зависимости-0-34D399)
-![Tests](https://img.shields.io/badge/tests-21%20passed-34D399)
+[![Build](https://github.com/Fersiya/PhoneV2-server/actions/workflows/build-installer.yml/badge.svg)](https://github.com/Fersiya/PhoneV2-server/actions/workflows/build-installer.yml)
 
 [📱 Приложение для телефона](https://github.com/Fersiya/PhoneV2) · [⬇️ Скачать APK](https://github.com/Fersiya/PhoneV2/releases/latest)
 
@@ -29,20 +29,29 @@
 | 🔄 | Обновление приложения по воздуху (OTA) |
 | 🔔 | Иконка в трее: токен, адреса, туннель одним кликом |
 
-## 🚀 Быстрый старт
+## 🚀 Установка (2 минуты)
 
-1. Установи [Python 3.10+](https://www.python.org/downloads/) (галочка *Add to PATH*).
-2. Клонируй репозиторий и запусти:
-   ```bat
-   git clone https://github.com/Fersiya/PhoneV2-server.git
-   cd PhoneV2-server
-   python server.py
-   ```
-3. Для фоновой работы и автозагрузки запусти `install_autostart.bat` **от имени администратора**.
-4. Для режима «вне дома» положи рядом [`cloudflared.exe`](https://github.com/cloudflare/cloudflared/releases) (или установи его в Windows).
-5. Открой приложение на телефоне в той же Wi-Fi сети → **«Найти ПК в сети Wi-Fi»** — токен подтянется сам.
+1. ⬇️ Скачай **[PCControl-Setup.exe](https://github.com/Fersiya/PhoneV2-server/releases/latest)** и запусти. Python ставить не нужно.
+2. Установщик сам добавит программу в автозагрузку и откроет порт 8765 в брандмауэре только для домашней сети.
+3. Появится окно «Пульт ПК» (потом открывается двойным кликом по значку ⚡ у часов).
+4. 📱 Установи [приложение](https://github.com/Fersiya/PhoneV2/releases/latest), подключи телефон к той же Wi-Fi и нажми **Опции → «Найти ПК в Wi-Fi»**. Токен подтянется сам, пока окно на ПК открыто.
 
-Двойной клик по иконке ⚡ в трее покажет адрес, токен и состояние туннеля.
+> 🔒 Каждый, кто ставит программу, получает **собственный** сервер на своём ПК и свой токен. Моего сервера здесь нет — все данные остаются у тебя.
+
+### 🛠️ Для разработчиков (из исходников)
+
+```bat
+git clone https://github.com/Fersiya/PhoneV2-server.git
+cd PhoneV2-server
+python server.py
+```
+
+Для режима «вне дома» положи рядом [`cloudflared.exe`](https://github.com/cloudflare/cloudflared/releases) (в установщик он пока не входит).
+
+## 🔄 Обновления
+
+- 📱 **Приложение:** сервер сам раз в 6 часов скачивает свежий APK из [релиза PhoneV2](https://github.com/Fersiya/PhoneV2/releases/latest) в папку `updates/`; на телефоне — «Опции → Обновления → Проверить на ПК».
+- 🖥️ **Сервер:** в окне программы кнопка «⬆ Обновления» проверяет новый релиз и ставит его в один клик.
 
 ## 🗺️ Как это работает
 
@@ -60,7 +69,8 @@ flowchart LR
 
 - 🔑 Доступ по токену (`X-Token`), сравнение через `hmac.compare_digest`.
 - 🚫 10 неверных токенов → IP блокируется на 15 минут (за туннелем учитывается реальный IP).
-- 🤝 Выдача токена кнопкой (`/api/pair`) работает **только в домашней сети** — через туннель токен не отдаётся.
+- 🤝 Токен телефону выдаётся **только в домашней сети и только пока открыто окно сопряжения** (5 минут после двойного клика по значку), один раз. Через туннель — никогда.
+- 🙈 Токен не пишется в лог.
 - 🛡️ Защита от DNS rebinding (проверка заголовка `Host`), от Path Traversal и UNC-путей в проводнике.
 - 📤 Загрузка принимает только фото/видео, имена файлов очищаются.
 - ⚠️ По HTTP/UDP токен идёт открытым текстом — не пробрасывай порт 8765 на роутере в интернет, для внешнего доступа есть туннель (HTTPS).
@@ -79,6 +89,8 @@ flowchart LR
 
 ```
 server.py          точка входа
+installer/         установщик (Inno Setup) и иконка
+server/version.py  версия сервера: подними — и CI выпустит новый релиз
 server/            пакет: winapi, capture, input, handler, network, tray, auth, ota…
 tests/             модульные тесты (python -m unittest discover tests)
 install_autostart.bat   автозагрузка + правила брандмауэра
