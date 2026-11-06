@@ -27,7 +27,7 @@ jobs:
           pip install pyinstaller
           pyinstaller --noconfirm --clean --onedir --noconsole --name PCControl --icon installer/icon.ico --hidden-import tkinter server.py
 
-      - name: Проверка: собранный сервер запускается и отвечает
+      - name: "Проверка собранного сервера (запуск и ping)"
         shell: pwsh
         run: |
           $p = Start-Process -FilePath "dist\PCControl\PCControl.exe" -PassThru
