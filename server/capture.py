@@ -249,6 +249,31 @@ def _encode_buf(buf: "_Buf", quality: int) -> bytes:
             _gdiplus.GdipDisposeImage(gp_bitmap)
 
 
+_dx_cam = None
+_dx_lock = threading.Lock()
+
+
+def _get_dx_camera(dxcam):
+    """Одна общая DXGI-камера на процесс: повторное создание после release() в dxcam ненадёжно."""
+    global _dx_cam
+    with _dx_lock:
+        if _dx_cam is not None and not getattr(_dx_cam, "is_released", False):
+            return _dx_cam
+        _dx_cam = dxcam.create(output_color="BGR")
+        return _dx_cam
+
+
+def _drop_dx_camera() -> None:
+    global _dx_cam
+    with _dx_lock:
+        try:
+            if _dx_cam is not None:
+                _dx_cam.release()
+        except Exception:
+            pass
+        _dx_cam = None
+
+
 class _FrameHub:
     """Один поток захвата на всех зрителей: кодирует кадры с нужной частотой, а каждый зритель
     забирает самый свежий (медленный телефон пропускает кадры, а не копит задержку)."""
@@ -296,9 +321,10 @@ class _FrameHub:
         # при быстрой смене качества прошлый захват может ещё освобождаться — пробуем несколько раз
         for attempt in range(8):
             try:
-                cam = dxcam.create(output_color="BGR")
+                cam = _get_dx_camera(dxcam)
                 for _ in range(25):
-                    first = cam.grab()
+                    with _dx_lock:
+                        first = cam.grab()
                     if first is not None:
                         break
                     time.sleep(0.04)
@@ -307,11 +333,7 @@ class _FrameHub:
                 last_err = "нет кадра"
             except Exception as e:
                 last_err = e
-            try:
-                if cam is not None:
-                    cam.release()
-            except Exception:
-                pass
+            _drop_dx_camera()
             cam = None
             time.sleep(0.4)
         if cam is None or first is None:
@@ -374,14 +396,21 @@ class _FrameHub:
         last = first
         frame_no = 0
         grab_t, grabs = 0.0, 0
+        errs = 0
         t_log = time.monotonic()
         try:
             while self.alive:
                 t0 = time.monotonic()
                 try:
-                    arr = cam.grab()
+                    with _dx_lock:
+                        arr = cam.grab()
+                    errs = 0
                 except Exception:
                     arr = None
+                    errs += 1
+                    if errs > 30:  # устройство потеряно (смена режима экрана и т.п.) — пересоздадим при следующем запуске
+                        _drop_dx_camera()
+                        break
                 grab_t += time.monotonic() - t0
                 grabs += 1
                 if arr is not None:
@@ -405,10 +434,6 @@ class _FrameHub:
         finally:
             self.alive = False
             time.sleep(0.3)
-            try:
-                cam.release()
-            except Exception:
-                pass
         return True
 
     def _run(self) -> None:
