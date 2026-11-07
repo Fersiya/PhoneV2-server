@@ -59,26 +59,50 @@ class _AudioHub:
         stream = None
         try:
             p = pa.PyAudio()
-            wasapi = p.get_host_api_info_by_type(pa.paWASAPI)
-            spk = p.get_device_info_by_index(wasapi["defaultOutputDevice"])
-            if not spk.get("isLoopbackDevice"):
-                found = None
-                for lb in p.get_loopback_device_info_generator():
-                    if spk["name"] in lb["name"]:
-                        found = lb
+            loopbacks = list(p.get_loopback_device_info_generator())
+            if not loopbacks:
+                raise RuntimeError("в системе нет loopback-устройств WASAPI")
+            first = None
+            try:
+                wasapi = p.get_host_api_info_by_type(pa.paWASAPI)
+                dflt = p.get_device_info_by_index(wasapi["defaultOutputDevice"])
+                if dflt.get("isLoopbackDevice"):
+                    first = dflt
+                else:
+                    first = next((lb for lb in loopbacks if dflt["name"] in lb["name"]), None)
+            except Exception as e:
+                log(f"[Audio] устройство вывода по умолчанию не определено ({e}) — перебираю все")
+            candidates = ([first] if first else []) + [lb for lb in loopbacks if not first or lb["index"] != first["index"]]
+            log("[Audio] кандидаты: " + "; ".join(f"{d['name']} ({d['maxInputChannels']} кан., {int(d['defaultSampleRate'])} Гц)" for d in candidates))
+            stream = None
+            last_err = None
+            for dev in candidates:
+                native = max(1, int(dev["maxInputChannels"]))
+                rate = int(dev["defaultSampleRate"])
+                for ch_open in dict.fromkeys((native, 2, 1)):
+                    out_ch = min(ch_open, 2)
+
+                    def cb(in_data, frame_count, time_info, status, _o=ch_open, _c=out_ch):
+                        data = in_data
+                        if _o > _c:  # многоканальный звук (5.1/7.1) — берём передние левый и правый
+                            import numpy as np
+                            data = np.frombuffer(in_data, dtype=np.int16).reshape(-1, _o)[:, :_c].tobytes()
+                        self._publish(data)
+                        return (None, pa.paContinue)
+
+                    try:
+                        stream = p.open(format=pa.paInt16, channels=ch_open, rate=rate, frames_per_buffer=rate // 50,
+                                        input=True, input_device_index=dev["index"], stream_callback=cb)
+                        spk = dev
+                        ch = out_ch
                         break
-                if found is None:
-                    raise RuntimeError("не найден loopback-вход для устройства вывода звука")
-                spk = found
-            rate = int(spk["defaultSampleRate"])
-            ch = max(1, min(2, int(spk["maxInputChannels"])))
-
-            def cb(in_data, frame_count, time_info, status):
-                self._publish(in_data)
-                return (None, pa.paContinue)
-
-            stream = p.open(format=pa.paInt16, channels=ch, rate=rate, frames_per_buffer=rate // 50,
-                            input=True, input_device_index=spk["index"], stream_callback=cb)
+                    except Exception as e:
+                        last_err = f"{dev.get('name')} ({ch_open} кан., {rate} Гц): {e}"
+                        log(f"[Audio] не удалось открыть {last_err}")
+                if stream is not None:
+                    break
+            if stream is None:
+                raise RuntimeError(f"не удалось открыть ни одно устройство; последнее: {last_err}")
             self.rate, self.channels = rate, ch
             log(f"[Audio] захват звука: {spk['name']}, {rate} Гц, каналов {ch}")
             with self.cond:
