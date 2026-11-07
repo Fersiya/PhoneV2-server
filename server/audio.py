@@ -45,20 +45,27 @@ class _AudioHub:
             self.chunks.append((self.seq, data))
             self.cond.notify_all()
 
-    def _run(self) -> None:
+    def _run_pa(self) -> bool:
+        """Захват через PyAudioWPatch (WASAPI loopback). True — звук реально работал."""
+        ok = False
         try:
             import pyaudiowpatch as pa
         except Exception as e:
             self.error = f"нет модуля захвата звука: {e}"
             log(f"[Audio] {self.error}")
-            with self.cond:
-                self.alive = False
-                self.cond.notify_all()
-            return
+            return False
         p = None
         stream = None
         try:
             p = pa.PyAudio()
+            try:
+                apis = [p.get_host_api_info_by_index(i)["name"] for i in range(p.get_host_api_count())]
+                log(f"[Audio] звуковые API: {apis}; устройств всего: {p.get_device_count()}")
+                for i in range(p.get_device_count()):
+                    d = p.get_device_info_by_index(i)
+                    log(f"[Audio]   #{i} {d.get('name')} | API {d.get('hostApi')} | вх {d.get('maxInputChannels')} вых {d.get('maxOutputChannels')} | loopback={d.get('isLoopbackDevice', False)}")
+            except Exception as e:
+                log(f"[Audio] не удалось перечислить устройства: {e}")
             loopbacks = list(p.get_loopback_device_info_generator())
             if not loopbacks:
                 raise RuntimeError("в системе нет loopback-устройств WASAPI")
@@ -108,6 +115,7 @@ class _AudioHub:
             with self.cond:
                 self.ready = True
                 self.cond.notify_all()
+            ok = True
             while self.alive and self.clients > 0:
                 time.sleep(0.3)
         except Exception as e:
@@ -125,6 +133,45 @@ class _AudioHub:
                     p.terminate()
             except Exception:
                 pass
+        return ok
+
+    def _run_sc(self) -> bool:
+        """Запасной способ: библиотека soundcard (WASAPI loopback через Media Foundation)."""
+        ok = False
+        try:
+            import numpy as np
+            import soundcard as sc
+        except Exception as e:
+            log(f"[Audio] запасной захват (soundcard) недоступен: {e}")
+            return False
+        try:
+            spk = sc.default_speaker()
+            log(f"[Audio] soundcard: устройство вывода «{spk.name}»; все выходы: {[str(x.name) for x in sc.all_speakers()]}")
+            mic = sc.get_microphone(str(spk.id), include_loopback=True)
+            rate, ch = 48000, 2
+            block = rate // 50
+            with mic.recorder(samplerate=rate, channels=ch, blocksize=block) as rec:
+                self.rate, self.channels = rate, ch
+                log(f"[Audio] захват звука (soundcard): {spk.name}, {rate} Гц, стерео")
+                with self.cond:
+                    self.ready = True
+                    self.cond.notify_all()
+                ok = True
+                while self.alive and self.clients > 0:
+                    data = rec.record(numframes=block)
+                    pcm = (np.clip(data, -1.0, 1.0) * 32767).astype(np.int16)
+                    self._publish(pcm.tobytes())
+        except Exception as e:
+            self.error = f"soundcard: {e}"
+            log(f"[Audio] ошибка запасного захвата: {e}")
+        return ok
+
+    def _run(self) -> None:
+        try:
+            if not self._run_pa() and self.alive and self.clients > 0:
+                log("[Audio] основной захват не сработал — пробую запасной (soundcard)")
+                self._run_sc()
+        finally:
             with self.cond:
                 self.alive = False
                 self.ready = False
