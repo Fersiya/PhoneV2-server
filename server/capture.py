@@ -268,9 +268,120 @@ class _FrameHub:
             self.seq += 1
             self.cond.notify_all()
 
+    def _run_dxgi(self) -> bool:
+        """Захват через DXGI Desktop Duplication (на видеокарте, в разы быстрее GDI). False — недоступно, нужен GDI."""
+        import io
+        import queue
+        from .config import log
+        try:
+            import dxcam
+            from PIL import Image, ImageDraw
+        except Exception as e:
+            log(f"[Stream] DXGI-захват недоступен (нет модулей): {e}")
+            return False
+        w, q, all_mons, fps = self.key
+        try:
+            cam = dxcam.create(output_color="RGB")
+            first = None
+            for _ in range(25):
+                first = cam.grab()
+                if first is not None:
+                    break
+                time.sleep(0.04)
+        except Exception as e:
+            log(f"[Stream] DXGI-захват не запустился: {e}")
+            return False
+        if first is None:
+            log("[Stream] DXGI не отдал кадр — перехожу на GDI")
+            try:
+                cam.release()
+            except Exception:
+                pass
+            return False
+        log("[Stream] съёмка через DXGI (Desktop Duplication)")
+        ready: "queue.Queue" = queue.Queue(maxsize=1)
+        stats = {"n": 0, "enc": 0.0, "bytes": 0}
+
+        def encoder() -> None:
+            while self.alive:
+                try:
+                    arr = ready.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                t0 = time.monotonic()
+                try:
+                    sh, sw = arr.shape[0], arr.shape[1]
+                    img = Image.fromarray(arr)
+                    dw = min(w, sw)
+                    dh = max(1, int(sh * dw / sw))
+                    if dw != sw:
+                        img = img.resize((dw, dh), Image.BILINEAR, reducing_gap=2.0)
+                    pt = wintypes.POINT()
+                    if _user32.GetCursorPos(ctypes.byref(pt)):
+                        cx, cy = int(pt.x * dw / sw), int(pt.y * dh / sh)
+                        ImageDraw.Draw(img).ellipse((cx - 6, cy - 6, cx + 6, cy + 6), fill=(255, 48, 48), outline=(255, 255, 255), width=2)
+                    out = io.BytesIO()
+                    img.save(out, "JPEG", quality=q)
+                    jpg = out.getvalue()
+                except Exception:
+                    jpg = b""
+                stats["enc"] += time.monotonic() - t0
+                if jpg:
+                    stats["n"] += 1
+                    stats["bytes"] += len(jpg)
+                    self._publish(jpg)
+
+        threading.Thread(target=encoder, daemon=True).start()
+        interval = 1.0 / fps
+        last = first
+        grab_t, grabs = 0.0, 0
+        t_log = time.monotonic()
+        try:
+            while self.alive:
+                t0 = time.monotonic()
+                try:
+                    arr = cam.grab()
+                except Exception:
+                    arr = None
+                grab_t += time.monotonic() - t0
+                grabs += 1
+                if arr is not None:
+                    last = arr
+                try:
+                    ready.put_nowait(last)
+                except queue.Full:
+                    pass
+                now = time.monotonic()
+                if now - t_log >= 10 and stats["n"]:
+                    n = stats["n"]
+                    log(f"[Stream] DXGI: {n / (now - t_log):.0f} кадр/с (цель {fps}), кадр ≈{stats['bytes'] / n / 1024:.0f} КБ, "
+                        f"съёмка {grab_t / max(grabs, 1) * 1000:.0f} мс, ресайз+JPEG {stats['enc'] / n * 1000:.0f} мс, зрителей {self.clients}")
+                    stats.update(n=0, enc=0.0, bytes=0)
+                    grab_t, grabs, t_log = 0.0, 0, now
+                rest = interval - (time.monotonic() - t0)
+                if rest > 0.0005:
+                    time.sleep(rest)
+        finally:
+            self.alive = False
+            try:
+                cam.release()
+            except Exception:
+                pass
+        return True
+
     def _run(self) -> None:
         if not IS_WINDOWS:
             return
+        if not self.key[2]:  # все мониторы сразу — только через GDI
+            try:
+                if self._run_dxgi():
+                    return
+            except Exception as e:
+                try:
+                    from .config import log
+                    log(f"[Stream] ошибка DXGI-захвата, перехожу на GDI: {e}")
+                except Exception:
+                    pass
         import queue
         w, q, all_mons, fps = self.key
         interval = 1.0 / fps
