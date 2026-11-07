@@ -270,18 +270,25 @@ class _FrameHub:
 
     def _run_dxgi(self) -> bool:
         """Захват через DXGI Desktop Duplication (на видеокарте, в разы быстрее GDI). False — недоступно, нужен GDI."""
-        import io
         import queue
         from .config import log
         try:
+            import cv2
             import dxcam
-            from PIL import Image, ImageDraw
         except Exception as e:
             log(f"[Stream] DXGI-захват недоступен (нет модулей): {e}")
             return False
         w, q, all_mons, fps = self.key
         try:
-            cam = dxcam.create(output_color="RGB")
+            cam = None
+            for attempt in range(4):
+                try:
+                    cam = dxcam.create(output_color="BGR")
+                    break
+                except Exception as e:  # предыдущий захват мог ещё не освободиться
+                    if attempt == 3:
+                        raise
+                    time.sleep(0.8)
             first = None
             for _ in range(25):
                 first = cam.grab()
@@ -311,18 +318,16 @@ class _FrameHub:
                 t0 = time.monotonic()
                 try:
                     sh, sw = arr.shape[0], arr.shape[1]
-                    img = Image.fromarray(arr)
                     dw = min(w, sw)
                     dh = max(1, int(sh * dw / sw))
-                    if dw != sw:
-                        img = img.resize((dw, dh), Image.BILINEAR, reducing_gap=2.0)
+                    img = cv2.resize(arr, (dw, dh), interpolation=cv2.INTER_AREA) if dw != sw else arr.copy()
                     pt = wintypes.POINT()
                     if _user32.GetCursorPos(ctypes.byref(pt)):
                         cx, cy = int(pt.x * dw / sw), int(pt.y * dh / sh)
-                        ImageDraw.Draw(img).ellipse((cx - 6, cy - 6, cx + 6, cy + 6), fill=(255, 48, 48), outline=(255, 255, 255), width=2)
-                    out = io.BytesIO()
-                    img.save(out, "JPEG", quality=q)
-                    jpg = out.getvalue()
+                        cv2.circle(img, (cx, cy), 6, (48, 48, 255), -1)
+                        cv2.circle(img, (cx, cy), 6, (255, 255, 255), 2)
+                    ok, enc = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, int(q)])
+                    jpg = enc.tobytes() if ok else b""
                 except Exception:
                     jpg = b""
                 stats["enc"] += time.monotonic() - t0
@@ -355,7 +360,7 @@ class _FrameHub:
                 if now - t_log >= 10 and stats["n"]:
                     n = stats["n"]
                     log(f"[Stream] DXGI: {n / (now - t_log):.0f} кадр/с (цель {fps}), кадр ≈{stats['bytes'] / n / 1024:.0f} КБ, "
-                        f"съёмка {grab_t / max(grabs, 1) * 1000:.0f} мс, ресайз+JPEG {stats['enc'] / n * 1000:.0f} мс, зрителей {self.clients}")
+                        f"съёмка {grab_t / max(grabs, 1) * 1000:.0f} мс, ресайз+JPEG(cv2) {stats['enc'] / n * 1000:.0f} мс, зрителей {self.clients}")
                     stats.update(n=0, enc=0.0, bytes=0)
                     grab_t, grabs, t_log = 0.0, 0, now
                 rest = interval - (time.monotonic() - t0)
