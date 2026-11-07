@@ -18,5 +18,5 @@ while time.time() - t0 < 6:
     frames += buf.count(b"--frame")
     buf = buf[-16:]
 fps = frames / (time.time() - t0)
-print(f"stream: {frames} кадров за 6 с ({fps:.1f} кадр/с)")
+print(f"stream: {frames} frames in 6 s ({fps:.1f} fps)")
 sys.exit(0 if frames >= 5 else 1)
