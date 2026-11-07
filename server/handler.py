@@ -23,6 +23,7 @@ from .config import (
     reload_config_if_needed,
 )
 from .auth import check_authorized
+from .audio import AudioConverter, acquire_audio, audio_info, release_audio
 from .capture import acquire_hub, capture_screen_jpeg, release_hub, set_stream_view
 from .clipboard import get_clipboard_text, set_clipboard_text
 from .windows import list_open_windows, control_window, get_active_window_title
@@ -361,6 +362,45 @@ class Handler(BaseHTTPRequestHandler):
                 return
             finally:
                 release_hub(hub)
+
+        if path == "/api/audio_info":
+            return self._reply(200, json.dumps(audio_info(), ensure_ascii=False), "application/json")
+
+        # Звук ПК: сырой PCM 16 бит; mode=remote — лёгкий (моно, ~24 кГц)
+        if path == "/audio":
+            qs = parse_qs(parsed.query)
+            light = qs.get("mode", ["lan"])[0] == "remote"
+            ahub = acquire_audio()
+            try:
+                if not ahub.wait_ready():
+                    return self._reply(503, "звук недоступен: " + (ahub.error or "нет устройства вывода"))
+                conv = AudioConverter(ahub.rate, ahub.channels, light)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Cache-Control", "no-cache, no-store")
+                self.send_header("X-Audio-Rate", str(conv.out_rate))
+                self.send_header("X-Audio-Channels", str(conv.out_channels))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                try:
+                    self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except Exception:
+                    pass
+                nxt = 0
+                silence = bytes(conv.out_rate // 20 * conv.out_channels * 2)  # 50 мс тишины, когда ПК молчит
+                while ahub.alive:
+                    chunks, nxt2 = ahub.next_chunks(nxt)
+                    if chunks:
+                        nxt = nxt2
+                        self.wfile.write(b"".join(conv.convert(c) for c in chunks))
+                    else:
+                        self.wfile.write(silence)
+                    self.wfile.flush()
+            except (ConnectionResetError, BrokenPipeError, socket.error):
+                return
+            finally:
+                release_audio(ahub)
+            return
 
         # Приближение: какую часть экрана отдавать в потоке (x0,y0,x1,y1 — доли 0..1)
         if path == "/api/view":

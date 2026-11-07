@@ -142,6 +142,24 @@ class ServerTrayModuleTestCase(unittest.TestCase):
         self.assertTrue(callable(remove_tray_icon))
 
 
+
+class AudioConverterTestCase(unittest.TestCase):
+    def test_light_mode_is_mono_and_smaller(self):
+        from server.audio import AudioConverter
+        import struct
+        conv = AudioConverter(48000, 2, True)
+        self.assertEqual((conv.out_rate, conv.out_channels), (24000, 1))
+        data = struct.pack("<" + "h" * 960 * 2, *([1000, -1000] * 960))
+        out = conv.convert(data)
+        self.assertEqual(len(out), 960 // 2 * 2)
+
+    def test_lan_mode_passthrough(self):
+        from server.audio import AudioConverter
+        conv = AudioConverter(44100, 2, False)
+        self.assertEqual(conv.convert(b"abcd"), b"abcd")
+        self.assertEqual((conv.out_rate, conv.out_channels), (44100, 2))
+
+
 if __name__ == "__main__":
     unittest.main()
 

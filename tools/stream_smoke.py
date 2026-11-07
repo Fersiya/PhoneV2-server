@@ -8,6 +8,11 @@ import urllib.request
 cfg = os.path.join(os.environ.get("LOCALAPPDATA", ""), "PCControl", "config.json")
 token = json.load(open(cfg, encoding="utf-8"))["token"]
 req = urllib.request.Request("http://127.0.0.1:8765/stream?fps=60&w=960&q=52", headers={"X-Token": token})
+try:
+    info = urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:8765/api/audio_info", headers={"X-Token": token}), timeout=10).read().decode("utf-8", "replace")
+    print("audio_info:", info.encode("ascii", "replace").decode())
+except Exception as e:
+    print("audio_info error:", str(e).encode("ascii", "replace").decode())
 resp = urllib.request.urlopen(req, timeout=45)
 frames, buf = 0, b""
 t_start = time.time()
