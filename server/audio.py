@@ -185,7 +185,7 @@ class _AudioHub:
                 self.cond.wait(0.2)
             return self.ready
 
-    def next_chunks(self, next_seq: int, timeout: float = 0.06):
+    def next_chunks(self, next_seq: int, timeout: float = 0.25):
         """Возвращает (список кусков, следующий номер). Отставший слушатель перескакивает к свежему звуку."""
         with self.cond:
             if self.seq < next_seq:
@@ -193,7 +193,7 @@ class _AudioHub:
             if not self.chunks:
                 return [], next_seq
             first = self.chunks[0][0]
-            if next_seq < first or self.seq - next_seq > 12:  # отстали больше чем на ~250 мс — не копим задержку
+            if next_seq < first or self.seq - next_seq > 35:  # отстали больше чем на ~700 мс — не копим задержку
                 next_seq = max(first, self.seq - 2)
             out = [d for s, d in self.chunks if s >= next_seq]
             return out, self.seq + 1

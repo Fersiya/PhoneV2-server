@@ -387,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
                 nxt = 0
-                silence = bytes(conv.out_rate // 20 * conv.out_channels * 2)  # 50 мс тишины, когда ПК молчит
+                silence = bytes(conv.out_rate // 4 * conv.out_channels * 2)  # 250 мс тишины, только когда ПК молчит дольше 250 мс
                 while ahub.alive:
                     chunks, nxt2 = ahub.next_chunks(nxt)
                     if chunks:
