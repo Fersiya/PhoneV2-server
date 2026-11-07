@@ -17,6 +17,8 @@ if IS_WINDOWS:
     from .winapi import EncoderParameters
 
 __all__ = [
+    "acquire_hub",
+    "release_hub",
     "capture_screen_jpeg",
     "SCREEN_CACHE_TTL",
 ]
@@ -153,3 +155,76 @@ def capture_screen_jpeg(max_width: int = 960, quality: int = 60, all_monitors: b
             _gdi32.DeleteObject(hbmp)
             _gdi32.DeleteDC(hdc_mem)
             _user32.ReleaseDC(0, hdc_screen)
+
+
+class _FrameHub:
+    """Один поток захвата на всех зрителей: кодирует кадры с нужной частотой, а каждый зритель
+    забирает самый свежий (медленный телефон пропускает кадры, а не копит задержку)."""
+
+    def __init__(self, key: tuple) -> None:
+        self.key = key  # (w, q, all_monitors, fps)
+        self.cond = threading.Condition()
+        self.frame = b""
+        self.seq = 0
+        self.clients = 0
+        self.alive = True
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self) -> None:
+        w, q, all_mons, fps = self.key
+        interval = 1.0 / fps
+        n, enc_total, bytes_total, t_log = 0, 0.0, 0, time.monotonic()
+        while self.alive:
+            t0 = time.monotonic()
+            jpg = capture_screen_jpeg(max_width=w, quality=q, all_monitors=all_mons)
+            enc = time.monotonic() - t0
+            if jpg:
+                with self.cond:
+                    self.frame = jpg
+                    self.seq += 1
+                    self.cond.notify_all()
+                n += 1
+                enc_total += enc
+                bytes_total += len(jpg)
+            now = time.monotonic()
+            if now - t_log >= 10 and n:
+                try:
+                    from .config import log
+                    log(f"[Stream] захват {n / (now - t_log):.0f} кадр/с (цель {fps}), кадр ≈{bytes_total / n / 1024:.0f} КБ, "
+                        f"съёмка+JPEG {enc_total / n * 1000:.0f} мс, зрителей {self.clients}")
+                except Exception:
+                    pass
+                n, enc_total, bytes_total, t_log = 0, 0.0, 0, now
+            rest = interval - (time.monotonic() - t0)
+            if rest > 0.0005:
+                time.sleep(rest)
+
+    def wait_frame(self, last_seq: int, timeout: float = 2.0):
+        with self.cond:
+            if self.seq == last_seq:
+                self.cond.wait(timeout)
+            return self.seq, self.frame
+
+
+_hubs: dict = {}
+_hubs_lock = threading.Lock()
+
+
+def acquire_hub(w: int, q: int, all_mons: bool, fps: int) -> _FrameHub:
+    key = (w, q, all_mons, fps)
+    with _hubs_lock:
+        hub = _hubs.get(key)
+        if hub is None or not hub.alive:
+            hub = _FrameHub(key)
+            _hubs[key] = hub
+        hub.clients += 1
+        return hub
+
+
+def release_hub(hub: _FrameHub) -> None:
+    with _hubs_lock:
+        hub.clients -= 1
+        if hub.clients <= 0:
+            hub.alive = False
+            if _hubs.get(hub.key) is hub:
+                del _hubs[hub.key]

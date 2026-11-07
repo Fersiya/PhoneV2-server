@@ -23,7 +23,7 @@ from .config import (
     reload_config_if_needed,
 )
 from .auth import check_authorized
-from .capture import capture_screen_jpeg
+from .capture import acquire_hub, capture_screen_jpeg, release_hub
 from .clipboard import get_clipboard_text, set_clipboard_text
 from .windows import list_open_windows, control_window, get_active_window_title
 from .apps import (
@@ -319,23 +319,21 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-            frame_interval = 1.0 / fps
+            hub = acquire_hub(max(320, min(1920, w)), max(20, min(95, q)), all_mons, fps)
+            last = -1
             try:
                 while True:
-                    t0 = time.monotonic()
-                    jpg = capture_screen_jpeg(max_width=w, quality=q, all_monitors=all_mons)
-                    if jpg:
-                        header = f"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {len(jpg)}\r\n\r\n".encode("ascii")
-                        self.wfile.write(header)
-                        self.wfile.write(jpg)
-                        self.wfile.write(b"\r\n")
-                        self.wfile.flush()
-                    elapsed = time.monotonic() - t0
-                    sleep_rem = frame_interval - elapsed
-                    if sleep_rem > 0.0005:
-                        time.sleep(sleep_rem)
+                    seq, jpg = hub.wait_frame(last)
+                    if seq == last or not jpg:
+                        continue
+                    last = seq
+                    header = f"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {len(jpg)}\r\n\r\n".encode("ascii")
+                    self.wfile.write(header + jpg + b"\r\n")
+                    self.wfile.flush()
             except (ConnectionResetError, BrokenPipeError, socket.error):
                 return
+            finally:
+                release_hub(hub)
 
         # Одиночный скриншот экрана
         if path == "/screen":
