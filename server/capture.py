@@ -157,6 +157,93 @@ def capture_screen_jpeg(max_width: int = 960, quality: int = 60, all_monitors: b
             _user32.ReleaseDC(0, hdc_screen)
 
 
+class _Buf:
+    """Буфер съёмки: своя пара DC+bitmap, чтобы кодировать один кадр, пока снимается следующий."""
+
+    def __init__(self, hdc_screen, w: int, h: int) -> None:
+        self.w, self.h = w, h
+        self.hdc = _gdi32.CreateCompatibleDC(hdc_screen)
+        self.hbmp = _gdi32.CreateCompatibleBitmap(hdc_screen, w, h)
+        self.old = _gdi32.SelectObject(self.hdc, self.hbmp)
+
+    def free(self) -> None:
+        try:
+            _gdi32.SelectObject(self.hdc, self.old)
+            _gdi32.DeleteObject(self.hbmp)
+            _gdi32.DeleteDC(self.hdc)
+        except Exception:
+            pass
+
+
+def _screen_rect(all_monitors: bool, max_width: int):
+    if all_monitors:
+        sx, sy = _user32.GetSystemMetrics(76), _user32.GetSystemMetrics(77)
+        sw, sh = _user32.GetSystemMetrics(78), _user32.GetSystemMetrics(79)
+    else:
+        sx = sy = 0
+        sw, sh = _user32.GetSystemMetrics(0), _user32.GetSystemMetrics(1)
+    if sw <= 0 or sh <= 0:
+        return None
+    if sw > max_width:
+        dw, dh = max_width, max(1, int(sh * (max_width / sw)))
+    else:
+        dw, dh = sw, sh
+    return sx, sy, sw, sh, dw, dh
+
+
+def _grab_into(buf: "_Buf", hdc_screen, sx, sy, sw, sh) -> None:
+    if sw == buf.w and sh == buf.h:
+        _gdi32.BitBlt(buf.hdc, 0, 0, buf.w, buf.h, hdc_screen, sx, sy, 0x00CC0020)
+    else:
+        _gdi32.SetStretchBltMode(buf.hdc, 3)
+        _gdi32.StretchBlt(buf.hdc, 0, 0, buf.w, buf.h, hdc_screen, sx, sy, sw, sh, 0x00CC0020)
+    pt = wintypes.POINT()
+    if _user32.GetCursorPos(ctypes.byref(pt)):
+        cx = int((pt.x - sx) * buf.w / sw)
+        cy = int((pt.y - sy) * buf.h / sh)
+        old_pen = _gdi32.SelectObject(buf.hdc, _get_cached_pen())
+        old_brush = _gdi32.SelectObject(buf.hdc, _get_cached_brush())
+        _gdi32.Ellipse(buf.hdc, cx - 6, cy - 6, cx + 6, cy + 6)
+        _gdi32.SelectObject(buf.hdc, old_pen)
+        _gdi32.SelectObject(buf.hdc, old_brush)
+
+
+def _encode_buf(buf: "_Buf", quality: int) -> bytes:
+    gp_bitmap = ctypes.c_void_p()
+    stream = ctypes.c_void_p()
+    try:
+        if _gdiplus.GdipCreateBitmapFromHBITMAP(buf.hbmp, 0, ctypes.byref(gp_bitmap)) != 0 or not gp_bitmap:
+            return b""
+        if _ole32.CreateStreamOnHGlobal(None, True, ctypes.byref(stream)) != 0 or not stream:
+            return b""
+        q_val = wintypes.ULONG(quality)
+        params = EncoderParameters()
+        params.Count = 1
+        params.Parameter[0].Guid = GUID_QUALITY
+        params.Parameter[0].NumberOfValues = 1
+        params.Parameter[0].Type = 4
+        params.Parameter[0].Value = ctypes.cast(ctypes.byref(q_val), ctypes.c_void_p)
+        if _gdiplus.GdipSaveImageToStream(gp_bitmap, stream, ctypes.byref(CLSID_JPEG), ctypes.byref(params)) != 0:
+            return b""
+        hglobal = wintypes.HGLOBAL()
+        if _ole32.GetHGlobalFromStream(stream, ctypes.byref(hglobal)) != 0 or not hglobal:
+            return b""
+        size = _kernel32.GlobalSize(hglobal)
+        ptr = _kernel32.GlobalLock(hglobal) if size > 0 else None
+        if not ptr:
+            return b""
+        try:
+            return ctypes.string_at(ptr, size)
+        finally:
+            _kernel32.GlobalUnlock(hglobal)
+    finally:
+        if stream:
+            vtbl = ctypes.cast(stream, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+            ctypes.WINFUNCTYPE(wintypes.ULONG, ctypes.c_void_p)(vtbl[2])(stream)
+        if gp_bitmap:
+            _gdiplus.GdipDisposeImage(gp_bitmap)
+
+
 class _FrameHub:
     """Один поток захвата на всех зрителей: кодирует кадры с нужной частотой, а каждый зритель
     забирает самый свежий (медленный телефон пропускает кадры, а не копит задержку)."""
@@ -170,34 +257,93 @@ class _FrameHub:
         self.alive = True
         threading.Thread(target=self._run, daemon=True).start()
 
+    def _publish(self, jpg: bytes) -> None:
+        with self.cond:
+            self.frame = jpg
+            self.seq += 1
+            self.cond.notify_all()
+
     def _run(self) -> None:
+        if not IS_WINDOWS:
+            return
+        import queue
         w, q, all_mons, fps = self.key
         interval = 1.0 / fps
-        n, enc_total, bytes_total, t_log = 0, 0.0, 0, time.monotonic()
-        while self.alive:
-            t0 = time.monotonic()
-            jpg = capture_screen_jpeg(max_width=w, quality=q, all_monitors=all_mons)
-            enc = time.monotonic() - t0
-            if jpg:
-                with self.cond:
-                    self.frame = jpg
-                    self.seq += 1
-                    self.cond.notify_all()
-                n += 1
-                enc_total += enc
-                bytes_total += len(jpg)
-            now = time.monotonic()
-            if now - t_log >= 10 and n:
+        free: "queue.Queue" = queue.Queue()
+        ready: "queue.Queue" = queue.Queue(maxsize=1)
+        stats = {"n": 0, "grab": 0.0, "enc": 0.0, "bytes": 0}
+        hdc_screen = _user32.GetDC(0)
+
+        bufs = [None, None]
+
+        def encoder() -> None:
+            while self.alive:
                 try:
-                    from .config import log
-                    log(f"[Stream] захват {n / (now - t_log):.0f} кадр/с (цель {fps}), кадр ≈{bytes_total / n / 1024:.0f} КБ, "
-                        f"съёмка+JPEG {enc_total / n * 1000:.0f} мс, зрителей {self.clients}")
+                    slot = ready.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                buf = bufs[slot]
+                t0 = time.monotonic()
+                try:
+                    jpg = _encode_buf(buf, q)
                 except Exception:
-                    pass
-                n, enc_total, bytes_total, t_log = 0, 0.0, 0, now
-            rest = interval - (time.monotonic() - t0)
-            if rest > 0.0005:
-                time.sleep(rest)
+                    jpg = b""
+                stats["enc"] += time.monotonic() - t0
+                free.put(slot)
+                if jpg:
+                    stats["n"] += 1
+                    stats["bytes"] += len(jpg)
+                    self._publish(jpg)
+
+        threading.Thread(target=encoder, daemon=True).start()
+        free.put(0)
+        free.put(1)
+        t_log = time.monotonic()
+        try:
+            while self.alive:
+                t0 = time.monotonic()
+                rect = _screen_rect(all_mons, w)
+                if rect is None:
+                    time.sleep(0.2)
+                    continue
+                sx, sy, sw, sh, dw, dh = rect
+                try:
+                    idx = free.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                t0 = time.monotonic()
+                buf = bufs[idx]
+                if buf is None or buf.w != dw or buf.h != dh:
+                    if buf:
+                        buf.free()
+                    buf = bufs[idx] = _Buf(hdc_screen, dw, dh)
+                _grab_into(buf, hdc_screen, sx, sy, sw, sh)
+                stats["grab"] += time.monotonic() - t0
+                ready.put(idx)
+                now = time.monotonic()
+                if now - t_log >= 10 and stats["n"]:
+                    n = stats["n"]
+                    try:
+                        from .config import log
+                        log(f"[Stream] {n / (now - t_log):.0f} кадр/с (цель {fps}), кадр ≈{stats['bytes'] / n / 1024:.0f} КБ, "
+                            f"съёмка {stats['grab'] / n * 1000:.0f} мс, JPEG {stats['enc'] / n * 1000:.0f} мс, зрителей {self.clients}")
+                    except Exception:
+                        pass
+                    stats.update(n=0, grab=0.0, enc=0.0, bytes=0)
+                    t_log = now
+                rest = interval - (time.monotonic() - t0)
+                if rest > 0.0005:
+                    time.sleep(rest)
+        finally:
+            self.alive = False
+            time.sleep(0.6)
+            for b in bufs:
+                if b:
+                    b.free()
+            try:
+                _user32.ReleaseDC(0, hdc_screen)
+            except Exception:
+                pass
 
     def wait_frame(self, last_seq: int, timeout: float = 2.0):
         with self.cond:

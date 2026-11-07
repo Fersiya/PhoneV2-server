@@ -27,15 +27,19 @@ jobs:
           pip install pyinstaller
           pyinstaller --noconfirm --clean --onedir --noconsole --name PCControl --icon installer/icon.ico --add-data "installer/icon.ico;." --hidden-import tkinter server.py
 
-      - name: "Проверка собранного сервера (запуск и ping)"
+      - name: "Проверка собранного сервера (запуск, ping и трансляция экрана)"
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath "dist\PCControl\PCControl.exe" -PassThru
+          $p = Start-Process -FilePath "dist\PCControl\PCControl.exe" -ArgumentList "--minimized" -PassThru
           Start-Sleep -Seconds 10
           $r = Invoke-WebRequest -Uri "http://127.0.0.1:8765/ping" -UseBasicParsing -TimeoutSec 10
           Write-Host "ping -> $($r.StatusCode)"
           if ($r.StatusCode -ne 200) { exit 1 }
+          python tools/stream_smoke.py
+          $code = $LASTEXITCODE
           Stop-Process -Id $p.Id -Force
+          if (Test-Path "$env:LOCALAPPDATA\PCControl\server.log") { Get-Content "$env:LOCALAPPDATA\PCControl\server.log" -Tail 15 }
+          if ($code -ne 0) { exit $code }
 
       - name: Версия
         id: ver
