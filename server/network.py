@@ -420,6 +420,8 @@ def _cloudflared_worker_loop() -> None:
                     break
                 if line.strip():
                     tail = (tail + [line.strip()])[-6:]
+                if any(k in line for k in ("Registered tunnel connection", " ERR ", " WRN ", "Retrying", "unable", "failed")):
+                    log("    [cloudflared] " + line.strip()[:260])
                 if "Registered tunnel connection" in line:
                     _tunnel_ok = True
                     if _cloudflare_url:
