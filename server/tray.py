@@ -2,7 +2,7 @@
 
 Работает без сторонних зависимостей (только чистый WinAPI через ctypes и встроенный tkinter).
 Позволяет пользователю видеть статус Хоста, копировать токен в 1 клик,
-управлять Cloudflare туннелем, открывать логи и мягко выходить из приложения.
+открывать логи и мягко выходить из приложения.
 """
 import ctypes
 from ctypes import wintypes
@@ -18,10 +18,7 @@ from .auth import open_pairing, pairing_seconds_left
 from .version import VERSION
 from .network import (
     get_local_ips,
-    get_cloudflare_url,
-    is_cloudflare_running,
-    start_cloudflare_tunnel,
-    stop_cloudflare_tunnel,
+    get_tailscale_ip,
 )
 
 if IS_WINDOWS:
@@ -238,28 +235,16 @@ def show_status_dialog() -> None:
             c2 = card("Секретный токен (вручную)")
             field_row(c2, TOKEN, fg=OK, btn_text="Копировать", masked=True)
 
-            # --- туннель ---
-            c3 = card("Интернет-туннель (вне дома)")
+            # --- вне дома: Tailscale ---
+            c3 = card("Вне дома (Tailscale)")
             tun_state = label(c3, "", 10, True, WARN)
             tun_state.pack(anchor="w", pady=(4, 0))
+            ts_var = tk.StringVar(value="")
             tun_url = tk.Entry(c3, state="readonly", readonlybackground=FIELD, fg=WARN, relief="flat",
-                               font=("Consolas", 9), bd=6)
+                               font=("Consolas", 9), bd=6, textvariable=ts_var)
             tun_url.pack(fill="x", pady=(4, 0))
-            url_var = tk.StringVar(value="")
-            tun_url.config(textvariable=url_var)
-
-            def toggle_tunnel():
-                if is_cloudflare_running():
-                    stop_cloudflare_tunnel()
-                else:
-                    start_cloudflare_tunnel()
-                refresh()
-
-            tun_btns = tk.Frame(c3, bg=CARD)
-            tun_btns.pack(fill="x", pady=(8, 0))
-            btn_tun = button(tun_btns, "🌐 Включить", toggle_tunnel, bg=BTN)
-            btn_tun.pack(side="left")
-            button(tun_btns, "Копировать адрес", lambda: _copy_to_clipboard(url_var.get()), bg=BTN).pack(side="left", padx=6)
+            label(c3, "Установите Tailscale на ПК и телефоне и войдите в один аккаунт — приложение подключится само.", 9, False, MUTED).pack(anchor="w", pady=(6, 0))
+            button(c3, "Копировать адрес", lambda: _copy_to_clipboard(ts_var.get()), bg=BTN).pack(anchor="w", pady=(6, 0))
 
             def refresh():
                 left = pairing_seconds_left()
@@ -267,21 +252,12 @@ def show_status_dialog() -> None:
                     pair_lbl.config(text=f"🔓 Сопряжение открыто ещё {left // 60}:{left % 60:02d}", fg=OK)
                 else:
                     pair_lbl.config(text="🔒 Сопряжение закрыто", fg=MUTED)
-                running = is_cloudflare_running()
-                url = get_cloudflare_url() if running else ""
-                if running and url:
-                    from .network import get_tunnel_info
-                    inf = get_tunnel_info()
-                    if inf.get("healthy"):
-                        tun_state.config(text=f"● работает ({inf.get('protocol', '')}), адрес проверен", fg=OK)
-                    else:
-                        tun_state.config(text="● адрес выдан, проверяю связь…", fg=WARN)
-                elif running:
-                    tun_state.config(text="● запускается…", fg=WARN)
+                ts_ip = get_tailscale_ip()
+                if ts_ip:
+                    tun_state.config(text="● Tailscale подключён", fg=OK)
                 else:
-                    tun_state.config(text="● выключен", fg=BAD)
-                url_var.set(url or "—")
-                btn_tun.config(text="⛔ Выключить" if running else "🌐 Включить")
+                    tun_state.config(text="● Tailscale не найден (не запущен или не установлен)", fg=BAD)
+                ts_var.set(ts_ip or "—")
                 root.after(1500, refresh)
 
             refresh()
@@ -334,9 +310,6 @@ def _tray_window_proc(hwnd, msg, wparam, lparam):
             user32.AppendMenuW(hmenu, MF_STRING, 1, "🖥️ Информация и токен...")
             user32.AppendMenuW(hmenu, MF_SEPARATOR, 0, None)
 
-            cf_running = is_cloudflare_running()
-            tunnel_item = "🌐 Остановить Cloudflare Tunnel" if cf_running else "🌐 Включить Cloudflare Tunnel"
-            user32.AppendMenuW(hmenu, MF_STRING, 2, tunnel_item)
             user32.AppendMenuW(hmenu, MF_STRING, 6, "🔓 Разрешить сопряжение телефона (5 мин)")
             user32.AppendMenuW(hmenu, MF_STRING, 7, "⬆️ Проверить обновления")
             user32.AppendMenuW(hmenu, MF_STRING, 3, "📁 Открыть папку данных и логов")
@@ -353,11 +326,6 @@ def _tray_window_proc(hwnd, msg, wparam, lparam):
 
             if cmd == 1:
                 show_status_dialog()
-            elif cmd == 2:
-                if is_cloudflare_running():
-                    stop_cloudflare_tunnel()
-                else:
-                    start_cloudflare_tunnel()
             elif cmd == 6:
                 open_pairing(300)
             elif cmd == 7:
@@ -375,7 +343,6 @@ def _tray_window_proc(hwnd, msg, wparam, lparam):
                 os._exit(0)
             elif cmd == 5:
                 log("[Tray] Завершение работы Хоста по запросу пользователя.")
-                stop_cloudflare_tunnel()
                 remove_tray_icon()
                 os._exit(0)
             return 0

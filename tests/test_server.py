@@ -13,7 +13,7 @@ from server.media_keys import MEDIA_KEYS, COMBO_KEYS
 from server.ota import get_apk_manifest_version
 from server.auth import _auth_fails, check_authorized
 from server.handler import _is_local_request, is_valid_host_header
-from server.network import get_tunnel_info, is_cloudflare_running, stop_cloudflare_tunnel
+from server.network import get_network_info
 
 
 class ServerConfigTestCase(unittest.TestCase):
@@ -97,21 +97,10 @@ class ServerOtaTestCase(unittest.TestCase):
         self.assertIsNone(v_name)
 
 
-class ServerTunnelTestCase(unittest.TestCase):
-    def test_get_tunnel_info_structure(self):
-        info = get_tunnel_info()
-        self.assertIn("installed", info)
-        self.assertIn("running", info)
-        self.assertIn("url", info)
-        self.assertIn("cf_path", info)
-        self.assertIsInstance(info["running"], bool)
-        self.assertIsInstance(info["installed"], bool)
-
-    def test_stop_tunnel_when_not_running(self):
-        ok, msg = stop_cloudflare_tunnel()
-        self.assertTrue(ok)
-        self.assertFalse(is_cloudflare_running())
-
+class NetworkInfoTestCase(unittest.TestCase):
+    def test_network_info_structure(self):
+        info = get_network_info()
+        self.assertIn("tailscale", info)
 
 
 class ServerDnsRebindingTestCase(unittest.TestCase):

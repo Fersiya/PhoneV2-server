@@ -23,11 +23,7 @@ from .network import (
     start_network_services,
     get_local_ips,
     check_paths,
-    get_cloudflare_url,
-    start_cloudflare_tunnel,
-    stop_cloudflare_tunnel,
-    is_cloudflare_running,
-    get_tunnel_info,
+    get_network_info,
 )
 
 __all__ = [
@@ -47,11 +43,7 @@ __all__ = [
     "start_network_services",
     "get_local_ips",
     "check_paths",
-    "get_cloudflare_url",
-    "start_cloudflare_tunnel",
-    "stop_cloudflare_tunnel",
-    "is_cloudflare_running",
-    "get_tunnel_info",
+    "get_network_info",
     "is_valid_host_header",
     "setup_tray_icon",
     "remove_tray_icon",
