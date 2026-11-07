@@ -426,6 +426,7 @@ class _FrameHub:
         frame_no = 0
         grab_t, grabs = 0.0, 0
         errs = 0
+        sent_view, sent_t = None, 0.0
         t_log = time.monotonic()
         try:
             while self.alive:
@@ -442,13 +443,18 @@ class _FrameHub:
                         break
                 grab_t += time.monotonic() - t0
                 grabs += 1
-                if arr is not None:
+                fresh = arr is not None
+                if fresh:
                     last = arr
-                frame_no += 1
-                try:
-                    ready.put_nowait((frame_no, last))
-                except queue.Full:
-                    pass
+                # экран не менялся и область та же — повторно не кодируем (экономит канал и ЦП); раз в секунду всё равно шлём
+                now_s = time.monotonic()
+                if fresh or self.view != sent_view or now_s - sent_t >= 1.0:
+                    frame_no += 1
+                    sent_view, sent_t = self.view, now_s
+                    try:
+                        ready.put_nowait((frame_no, last))
+                    except queue.Full:
+                        pass
                 now = time.monotonic()
                 if now - t_log >= 10 and stats["n"]:
                     with pub_lock:
