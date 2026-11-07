@@ -172,6 +172,13 @@ def add_custom_app(body: str) -> Tuple[int, str]:
     from .config import _cfg_lock
     with _cfg_lock:
         existing = [a for a in CFG.get("apps", []) if a.get("id") != app_id]
+        key_proc = (process or "").lower()
+        key_launch = launch_path.lower()
+        for a in existing:
+            same_proc = key_proc and str(a.get("process") or "").lower() == key_proc
+            same_launch = key_launch and any(str(x).lower() == key_launch for x in (a.get("launch") or []))
+            if same_proc or same_launch:
+                return 409, "уже в списке"
         existing.append(new_app)
         CFG["apps"] = existing
         save_config(CFG)
