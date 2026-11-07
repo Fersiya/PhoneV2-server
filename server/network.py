@@ -77,6 +77,7 @@ def get_tunnel_info() -> dict:
         "url": _cloudflare_url if running else "",
         "cf_path": cf_path or "",
         "healthy": bool(running and _tunnel_ok),
+        "tailscale": get_tailscale_ip(),
         "protocol": _tunnel_protocol if running else "",
     }
 
@@ -224,6 +225,35 @@ def check_paths() -> None:
         exe = os.path.expandvars(a["launch"][0])
         if not os.path.exists(exe):
             log(f"[!] {a['title']}: не найден файл {exe}. Поправь путь в config.json")
+
+
+_ts_cache = ("", 0.0)
+
+
+def get_tailscale_ip() -> str:
+    """Адрес этого ПК в Tailscale (100.x.x.x), если Tailscale установлен и подключён."""
+    global _ts_cache
+    if time.time() - _ts_cache[1] < 60:
+        return _ts_cache[0]
+    ip = ""
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            a = info[4][0]
+            p = a.split(".")
+            if len(p) == 4 and p[0] == "100" and 64 <= int(p[1]) <= 127:
+                ip = a
+                break
+        if not ip and IS_WINDOWS:
+            import subprocess
+            exe = os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Tailscale", "tailscale.exe")
+            if os.path.isfile(exe):
+                out = subprocess.run([exe, "ip", "-4"], capture_output=True, text=True, timeout=4, creationflags=0x08000000).stdout.strip()
+                if out.startswith("100."):
+                    ip = out.splitlines()[0].strip()
+    except Exception:
+        ip = ""
+    _ts_cache = (ip, time.time())
+    return ip
 
 
 def get_local_ips() -> List[str]:

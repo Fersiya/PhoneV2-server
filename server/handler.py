@@ -59,6 +59,7 @@ from .network import (
     is_cloudflare_running,
     get_tunnel_info,
     get_pc_mac,
+    get_tailscale_ip,
 )
 from .media_keys import send_media_key
 from .input import handle_mouse, handle_type_text
@@ -267,6 +268,7 @@ class Handler(BaseHTTPRequestHandler):
                     "token": tok,
                     "pc": pc_name,
                     "mac": get_pc_mac(self.connection.getsockname()[0]),
+                    "tailscale": get_tailscale_ip(),
                     "tunnel": cloudflare_url
                 }, ensure_ascii=False),
                 "application/json"
