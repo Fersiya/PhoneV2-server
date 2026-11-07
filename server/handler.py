@@ -147,6 +147,24 @@ class Handler(BaseHTTPRequestHandler):
     def _authorized(self) -> bool:
         return check_authorized(self._client_ip(), self.headers)
 
+    # Через Cloudflare-туннель закрываем соединение после каждого ответа: cloudflared держит пул
+    # соединений, и если сервер закрыл простаивающее, пользователь видит 502 / долгие таймауты.
+    def send_response(self, code, message=None):
+        self._conn_set = False
+        super().send_response(code, message)
+
+    def send_header(self, keyword, value):
+        if keyword.lower() == "connection":
+            self._conn_set = True
+            if self._via_proxy():
+                value = "close"
+        super().send_header(keyword, value)
+
+    def end_headers(self):
+        if not getattr(self, "_conn_set", False) and self._via_proxy():
+            super().send_header("Connection", "close")
+        super().end_headers()
+
     def _reply(self, code: int, text: str, content_type: str = "text/plain") -> None:
         body = text.encode("utf-8")
         self.send_response(code)
