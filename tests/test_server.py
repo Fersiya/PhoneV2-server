@@ -145,6 +145,10 @@ class ServerTrayModuleTestCase(unittest.TestCase):
 
 class AudioConverterTestCase(unittest.TestCase):
     def test_light_mode_is_mono_and_smaller(self):
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            self.skipTest("нет numpy (в сборке Хоста он есть)")
         from server.audio import AudioConverter
         import struct
         conv = AudioConverter(48000, 2, True)
