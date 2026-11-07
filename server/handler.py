@@ -146,6 +146,13 @@ class Handler(BaseHTTPRequestHandler):
 
     # Через обратный прокси закрываем соединение после каждого ответа: прокси держит пул
     # соединений, и если сервер закрыл простаивающее, пользователь видит 502 / долгие таймауты.
+    def setup(self):
+        super().setup()
+        try:
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # кадры стрима уходят без задержки Nagle
+        except Exception:
+            pass
+
     def send_response(self, code, message=None):
         self._conn_set = False
         super().send_response(code, message)
