@@ -23,7 +23,7 @@ from .config import (
     reload_config_if_needed,
 )
 from .auth import check_authorized
-from .capture import acquire_hub, capture_screen_jpeg, release_hub
+from .capture import acquire_hub, capture_screen_jpeg, release_hub, set_stream_view
 from .clipboard import get_clipboard_text, set_clipboard_text
 from .windows import list_open_windows, control_window, get_active_window_title
 from .apps import (
@@ -341,20 +341,36 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
             hub = acquire_hub(max(320, min(1920, w)), max(20, min(95, q)), all_mons, fps)
+            if "x0" in qs:  # приложение сразу говорит, какую область экрана показывать
+                try:
+                    hub.set_view(*(float(qs[k][0]) for k in ("x0", "y0", "x1", "y1")))
+                except (KeyError, ValueError):
+                    pass
             last = -1
             try:
                 while True:
-                    seq, jpg = hub.wait_frame(last)
+                    seq, jpg, vw = hub.wait_frame_view(last)
                     if seq == last or not jpg:
                         continue
                     last = seq
-                    header = f"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {len(jpg)}\r\n\r\n".encode("ascii")
+                    header = (f"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {len(jpg)}\r\n"
+                              f"X-View: {vw[0]:.5f},{vw[1]:.5f},{vw[2]:.5f},{vw[3]:.5f}\r\n\r\n").encode("ascii")
                     self.wfile.write(header + jpg + b"\r\n")
                     self.wfile.flush()
             except (ConnectionResetError, BrokenPipeError, socket.error):
                 return
             finally:
                 release_hub(hub)
+
+        # Приближение: какую часть экрана отдавать в потоке (x0,y0,x1,y1 — доли 0..1)
+        if path == "/api/view":
+            qs = parse_qs(parsed.query)
+            try:
+                x0, y0, x1, y1 = (float(qs.get(k, [d])[0]) for k, d in (("x0", "0"), ("y0", "0"), ("x1", "1"), ("y1", "1")))
+            except ValueError:
+                return self._reply(400, "bad view")
+            set_stream_view(x0, y0, x1, y1)
+            return self._reply(200, "ok")
 
         # Одиночный скриншот экрана
         if path == "/screen":

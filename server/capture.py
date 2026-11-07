@@ -18,6 +18,7 @@ if IS_WINDOWS:
 
 __all__ = [
     "acquire_hub",
+    "set_stream_view",
     "release_hub",
     "capture_screen_jpeg",
     "SCREEN_CACHE_TTL",
@@ -274,6 +275,9 @@ def _drop_dx_camera() -> None:
         _dx_cam = None
 
 
+ZOOM_WIDTH = 1600  # ширина картинки при приближении
+
+
 class _FrameHub:
     """Один поток захвата на всех зрителей: кодирует кадры с нужной частотой, а каждый зритель
     забирает самый свежий (медленный телефон пропускает кадры, а не копит задержку)."""
@@ -282,14 +286,22 @@ class _FrameHub:
         self.key = key  # (w, q, all_monitors, fps)
         self.cond = threading.Condition()
         self.frame = b""
+        self.frame_view = (0.0, 0.0, 1.0, 1.0)
+        self.view = (0.0, 0.0, 1.0, 1.0)  # какая часть экрана сейчас нужна зрителю (нормализованный прямоугольник)
         self.seq = 0
         self.clients = 0
         self.alive = True
         threading.Thread(target=self._run, daemon=True).start()
 
-    def _publish(self, jpg: bytes) -> None:
+    def set_view(self, x0: float, y0: float, x1: float, y1: float) -> None:
+        x0, y0 = max(0.0, min(0.98, x0)), max(0.0, min(0.98, y0))
+        x1, y1 = max(x0 + 0.02, min(1.0, x1)), max(y0 + 0.02, min(1.0, y1))
+        self.view = (x0, y0, x1, y1)
+
+    def _publish(self, jpg: bytes, view=(0.0, 0.0, 1.0, 1.0)) -> None:
         with self.cond:
             self.frame = jpg
+            self.frame_view = view
             self.seq += 1
             self.cond.notify_all()
 
@@ -345,28 +357,41 @@ class _FrameHub:
         pub_lock = threading.Lock()
         pub = {"seq": 0}
 
-        def encode(arr) -> bytes:
+        def encode(arr):
             sh, sw = arr.shape[0], arr.shape[1]
-            dw = min(w, sw)
-            dh = max(1, int(sh * dw / sw))
+            vx0, vy0, vx1, vy1 = self.view
+            px0, py0 = int(vx0 * sw), int(vy0 * sh)
+            px1, py1 = max(px0 + 16, int(vx1 * sw)), max(py0 + 16, int(vy1 * sh))
+            px1, py1 = min(px1, sw), min(py1, sh)
+            px0, py0 = min(px0, px1 - 16), min(py0, py1 - 16)
+            # реальные границы (после округления до пикселей) — их же получит приложение
+            view = (px0 / sw, py0 / sh, px1 / sw, py1 / sh)
+            zoomed = (px1 - px0) < sw * 0.98 or (py1 - py0) < sh * 0.98
+            if zoomed:
+                arr = arr[py0:py1, px0:px1]
+            cw, ch = arr.shape[1], arr.shape[0]
+            # при приближении отдаём больше пикселей — картинка остаётся чёткой
+            dw = min(max(w, ZOOM_WIDTH) if zoomed else w, cw)
+            dh = max(1, int(ch * dw / cw))
             pt = wintypes.POINT()
             have_cur = bool(_user32.GetCursorPos(ctypes.byref(pt)))
-            cx, cy = int(pt.x * dw / sw), int(pt.y * dh / sh)
+            cx, cy = int((pt.x - px0) * dw / cw), int((pt.y - py0) * dh / ch)
+            have_cur = have_cur and 0 <= cx < dw and 0 <= cy < dh
             if cv2 is not None:
-                img = cv2.resize(arr, (dw, dh), interpolation=cv2.INTER_AREA) if dw != sw else arr.copy()
+                img = cv2.resize(arr, (dw, dh), interpolation=cv2.INTER_AREA) if dw != cw else arr.copy()
                 if have_cur:
                     cv2.circle(img, (cx, cy), 6, (48, 48, 255), -1)
                     cv2.circle(img, (cx, cy), 6, (255, 255, 255), 2)
                 ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), q])
-                return buf.tobytes() if ok else b""
+                return (buf.tobytes() if ok else b""), view
             img = Image.fromarray(arr[:, :, ::-1])
-            if dw != sw:
+            if dw != cw:
                 img = img.resize((dw, dh), Image.BILINEAR, reducing_gap=2.0)
             if have_cur:
                 ImageDraw.Draw(img).ellipse((cx - 6, cy - 6, cx + 6, cy + 6), fill=(255, 48, 48), outline=(255, 255, 255), width=2)
             out = io.BytesIO()
             img.save(out, "JPEG", quality=q)
-            return out.getvalue()
+            return out.getvalue(), view
 
         def encoder() -> None:
             while self.alive:
@@ -376,9 +401,9 @@ class _FrameHub:
                     continue
                 t0 = time.monotonic()
                 try:
-                    jpg = encode(arr)
+                    jpg, vw = encode(arr)
                 except Exception:
-                    jpg = b""
+                    jpg, vw = b"", (0.0, 0.0, 1.0, 1.0)
                 dt = time.monotonic() - t0
                 if jpg:
                     with pub_lock:
@@ -387,11 +412,15 @@ class _FrameHub:
                         stats["bytes"] += len(jpg)
                         if seq > pub["seq"]:  # старый кадр не показываем поверх нового
                             pub["seq"] = seq
-                            self._publish(jpg)
+                            self._publish(jpg, vw)
 
         n_enc = 3 if cv2 is not None else 2
         for _ in range(n_enc):
             threading.Thread(target=encoder, daemon=True).start()
+        hz = _refresh_hz()
+        if hz > 1 and fps > hz:
+            log(f"[Stream] частота монитора {hz} Гц — выше нет смысла, ограничиваю {fps} → {hz}")
+            fps = hz
         interval = 1.0 / fps
         last = first
         frame_no = 0
@@ -561,6 +590,12 @@ class _FrameHub:
                 self.cond.wait(timeout)
             return self.seq, self.frame
 
+    def wait_frame_view(self, last_seq: int, timeout: float = 2.0):
+        with self.cond:
+            if self.seq == last_seq:
+                self.cond.wait(timeout)
+            return self.seq, self.frame, self.frame_view
+
 
 _hubs: dict = {}
 _hubs_lock = threading.Lock()
@@ -573,8 +608,29 @@ def acquire_hub(w: int, q: int, all_mons: bool, fps: int) -> _FrameHub:
         if hub is None or not hub.alive:
             hub = _FrameHub(key)
             _hubs[key] = hub
+        if hub.clients == 0:
+            hub.view = (0.0, 0.0, 1.0, 1.0)
         hub.clients += 1
         return hub
+
+
+def set_stream_view(x0: float, y0: float, x1: float, y1: float) -> None:
+    """Приближение: какую часть экрана отдавать (в полном качестве) всем текущим зрителям."""
+    with _hubs_lock:
+        for hub in _hubs.values():
+            hub.set_view(x0, y0, x1, y1)
+
+
+def _refresh_hz() -> int:
+    """Частота обновления основного монитора, Гц (0 — не удалось определить)."""
+    try:
+        hdc = _user32.GetDC(0)
+        try:
+            return int(ctypes.windll.gdi32.GetDeviceCaps(hdc, 116))  # VREFRESH
+        finally:
+            _user32.ReleaseDC(0, hdc)
+    except Exception:
+        return 0
 
 
 def release_hub(hub: _FrameHub) -> None:
