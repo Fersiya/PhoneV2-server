@@ -46,9 +46,26 @@ Name: "{autodesktop}\Пульт ПК"; Filename: "{app}\PCControl.exe"; Tasks: d
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Пульт ПК"""; Flags: runhidden; StatusMsg: "Настраиваю брандмауэр…"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Пульт ПК"" dir=in action=allow protocol=TCP localport=8765 profile=any remoteip=LocalSubnet,100.64.0.0/10"; Flags: runhidden
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Пульт ПК (UDP)"" dir=in action=allow protocol=UDP localport=8765 profile=any remoteip=LocalSubnet,100.64.0.0/10"; Flags: runhidden
-Filename: "{app}\PCControl.exe"; Description: "Запустить Пульт ПК"; Flags: nowait postinstall runasoriginaluser
+Filename: "{app}\PCControl.exe"; Description: "Запустить Пульт ПК Хост"; Flags: nowait postinstall skipifsilent runasoriginaluser
+; Тихое обновление: запускаем сразу в трей
+Filename: "{app}\PCControl.exe"; Parameters: "--minimized"; Flags: nowait runasoriginaluser; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM PCControl.exe"; Flags: runhidden; RunOnceId: "KillApp"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Пульт ПК"""; Flags: runhidden; RunOnceId: "FwTcp"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Пульт ПК (UDP)"""; Flags: runhidden; RunOnceId: "FwUdp"
+
+[Code]
+// Хост живёт в трее без окон, поэтому «Диспетчер перезапуска» его не видит: закрываем сами перед установкой
+procedure KillHost();
+var R: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM PCControl.exe', '', SW_HIDE, ewWaitUntilTerminated, R);
+  Sleep(800);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  KillHost();
+  Result := '';
+end;

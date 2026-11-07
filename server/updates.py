@@ -140,7 +140,7 @@ def install_server_update() -> str:
         dest = os.path.join(tempfile.gettempdir(), "PCControl-Setup.exe")
         _download(_status["server_url"], dest)
         log("[Updates] Запуск установщика новой версии сервера…")
-        subprocess.Popen([dest, "/SILENT", "/NORESTART", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"], creationflags=DETACHED_FLAGS)
+        subprocess.Popen([dest, "/SILENT", "/NORESTART", "/CLOSEAPPLICATIONS"], creationflags=DETACHED_FLAGS)
         return "Устанавливаю обновление, сервер перезапустится…"
     except Exception as e:
         return f"Не удалось обновить сервер: {e}"
