@@ -170,7 +170,8 @@ class _AudioHub:
         try:
             if not self._run_pa() and self.alive and self.clients > 0:
                 log("[Audio] основной захват не сработал — пробую запасной (soundcard)")
-                self._run_sc()
+                if not self._run_sc():
+                    threading.Thread(target=_log_windows_audio_diag, daemon=True).start()
         finally:
             with self.cond:
                 self.alive = False
@@ -196,6 +197,33 @@ class _AudioHub:
                 next_seq = max(first, self.seq - 2)
             out = [d for s, d in self.chunks if s >= next_seq]
             return out, self.seq + 1
+
+
+_diag_done = False
+
+
+def _log_windows_audio_diag() -> None:
+    """Один раз за запуск пишет в лог, какие звуковые устройства и конечные точки видит Windows."""
+    global _diag_done
+    if _diag_done or not IS_WINDOWS:
+        return
+    _diag_done = True
+    import subprocess
+    cmds = {
+        "AudioEndpoint": "Get-PnpDevice -Class AudioEndpoint | Select-Object Status,FriendlyName | Format-Table -HideTableHeaders | Out-String -Width 200",
+        "SoundDevice": "Get-CimInstance Win32_SoundDevice | Select-Object Status,Name | Format-Table -HideTableHeaders | Out-String -Width 200",
+        "Сессия": "whoami; (Get-Process -Id $PID).SessionId; Get-Service Audiosrv,AudioEndpointBuilder | Select-Object Name,Status | Format-Table -HideTableHeaders | Out-String -Width 200",
+    }
+    for name, cmd in cmds.items():
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd], capture_output=True,
+                               timeout=12, creationflags=0x08000000)
+            out = (r.stdout or b"").decode("cp866", "replace").strip() or (r.stderr or b"").decode("cp866", "replace").strip()
+            for line in out.splitlines():
+                if line.strip():
+                    log(f"[Audio][{name}] {line.strip()}")
+        except Exception as e:
+            log(f"[Audio][{name}] не удалось получить: {e}")
 
 
 _hub = _AudioHub()
