@@ -270,75 +270,109 @@ class _FrameHub:
 
     def _run_dxgi(self) -> bool:
         """Захват через DXGI Desktop Duplication (на видеокарте, в разы быстрее GDI). False — недоступно, нужен GDI."""
+        import io
         import queue
         from .config import log
         try:
-            import cv2
             import dxcam
         except Exception as e:
             log(f"[Stream] DXGI-захват недоступен (нет модулей): {e}")
             return False
-        w, q, all_mons, fps = self.key
         try:
-            cam = None
-            for attempt in range(4):
-                try:
-                    cam = dxcam.create(output_color="BGR")
-                    break
-                except Exception as e:  # предыдущий захват мог ещё не освободиться
-                    if attempt == 3:
-                        raise
-                    time.sleep(0.8)
-            first = None
-            for _ in range(25):
-                first = cam.grab()
+            import cv2
+        except Exception:
+            cv2 = None
+        Image = ImageDraw = None
+        if cv2 is None:
+            try:
+                from PIL import Image, ImageDraw
+            except Exception as e:
+                log(f"[Stream] нет ни OpenCV, ни Pillow: {e}")
+                return False
+        w, q, all_mons, fps = self.key
+        cam = None
+        first = None
+        last_err = None
+        # при быстрой смене качества прошлый захват может ещё освобождаться — пробуем несколько раз
+        for attempt in range(8):
+            try:
+                cam = dxcam.create(output_color="BGR")
+                for _ in range(25):
+                    first = cam.grab()
+                    if first is not None:
+                        break
+                    time.sleep(0.04)
                 if first is not None:
                     break
-                time.sleep(0.04)
-        except Exception as e:
-            log(f"[Stream] DXGI-захват не запустился: {e}")
-            return False
-        if first is None:
-            log("[Stream] DXGI не отдал кадр — перехожу на GDI")
+                last_err = "нет кадра"
+            except Exception as e:
+                last_err = e
             try:
-                cam.release()
+                if cam is not None:
+                    cam.release()
             except Exception:
                 pass
+            cam = None
+            time.sleep(0.4)
+        if cam is None or first is None:
+            log(f"[Stream] DXGI-захват не запустился: {last_err} — перехожу на GDI")
             return False
-        log("[Stream] съёмка через DXGI (Desktop Duplication)")
-        ready: "queue.Queue" = queue.Queue(maxsize=1)
+        log("[Stream] съёмка через DXGI (Desktop Duplication)" + (", кодирование OpenCV" if cv2 else ", кодирование Pillow"))
+        ready: "queue.Queue" = queue.Queue(maxsize=2)
         stats = {"n": 0, "enc": 0.0, "bytes": 0}
+        pub_lock = threading.Lock()
+        pub = {"seq": 0}
+
+        def encode(arr) -> bytes:
+            sh, sw = arr.shape[0], arr.shape[1]
+            dw = min(w, sw)
+            dh = max(1, int(sh * dw / sw))
+            pt = wintypes.POINT()
+            have_cur = bool(_user32.GetCursorPos(ctypes.byref(pt)))
+            cx, cy = int(pt.x * dw / sw), int(pt.y * dh / sh)
+            if cv2 is not None:
+                img = cv2.resize(arr, (dw, dh), interpolation=cv2.INTER_AREA) if dw != sw else arr.copy()
+                if have_cur:
+                    cv2.circle(img, (cx, cy), 6, (48, 48, 255), -1)
+                    cv2.circle(img, (cx, cy), 6, (255, 255, 255), 2)
+                ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), q])
+                return buf.tobytes() if ok else b""
+            img = Image.fromarray(arr[:, :, ::-1])
+            if dw != sw:
+                img = img.resize((dw, dh), Image.BILINEAR, reducing_gap=2.0)
+            if have_cur:
+                ImageDraw.Draw(img).ellipse((cx - 6, cy - 6, cx + 6, cy + 6), fill=(255, 48, 48), outline=(255, 255, 255), width=2)
+            out = io.BytesIO()
+            img.save(out, "JPEG", quality=q)
+            return out.getvalue()
 
         def encoder() -> None:
             while self.alive:
                 try:
-                    arr = ready.get(timeout=0.5)
+                    seq, arr = ready.get(timeout=0.5)
                 except queue.Empty:
                     continue
                 t0 = time.monotonic()
                 try:
-                    sh, sw = arr.shape[0], arr.shape[1]
-                    dw = min(w, sw)
-                    dh = max(1, int(sh * dw / sw))
-                    img = cv2.resize(arr, (dw, dh), interpolation=cv2.INTER_AREA) if dw != sw else arr.copy()
-                    pt = wintypes.POINT()
-                    if _user32.GetCursorPos(ctypes.byref(pt)):
-                        cx, cy = int(pt.x * dw / sw), int(pt.y * dh / sh)
-                        cv2.circle(img, (cx, cy), 6, (48, 48, 255), -1)
-                        cv2.circle(img, (cx, cy), 6, (255, 255, 255), 2)
-                    ok, enc = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, int(q)])
-                    jpg = enc.tobytes() if ok else b""
+                    jpg = encode(arr)
                 except Exception:
                     jpg = b""
-                stats["enc"] += time.monotonic() - t0
+                dt = time.monotonic() - t0
                 if jpg:
-                    stats["n"] += 1
-                    stats["bytes"] += len(jpg)
-                    self._publish(jpg)
+                    with pub_lock:
+                        stats["enc"] += dt
+                        stats["n"] += 1
+                        stats["bytes"] += len(jpg)
+                        if seq > pub["seq"]:  # старый кадр не показываем поверх нового
+                            pub["seq"] = seq
+                            self._publish(jpg)
 
-        threading.Thread(target=encoder, daemon=True).start()
+        n_enc = 3 if cv2 is not None else 2
+        for _ in range(n_enc):
+            threading.Thread(target=encoder, daemon=True).start()
         interval = 1.0 / fps
         last = first
+        frame_no = 0
         grab_t, grabs = 0.0, 0
         t_log = time.monotonic()
         try:
@@ -352,22 +386,25 @@ class _FrameHub:
                 grabs += 1
                 if arr is not None:
                     last = arr
+                frame_no += 1
                 try:
-                    ready.put_nowait(last)
+                    ready.put_nowait((frame_no, last))
                 except queue.Full:
                     pass
                 now = time.monotonic()
                 if now - t_log >= 10 and stats["n"]:
-                    n = stats["n"]
-                    log(f"[Stream] DXGI: {n / (now - t_log):.0f} кадр/с (цель {fps}), кадр ≈{stats['bytes'] / n / 1024:.0f} КБ, "
-                        f"съёмка {grab_t / max(grabs, 1) * 1000:.0f} мс, ресайз+JPEG(cv2) {stats['enc'] / n * 1000:.0f} мс, зрителей {self.clients}")
-                    stats.update(n=0, enc=0.0, bytes=0)
+                    with pub_lock:
+                        n = stats["n"]
+                        log(f"[Stream] DXGI: {n / (now - t_log):.0f} кадр/с (цель {fps}), кадр ≈{stats['bytes'] / n / 1024:.0f} КБ, "
+                            f"съёмка {grab_t / max(grabs, 1) * 1000:.0f} мс, ресайз+JPEG {stats['enc'] / n * 1000:.0f} мс, зрителей {self.clients}")
+                        stats.update(n=0, enc=0.0, bytes=0)
                     grab_t, grabs, t_log = 0.0, 0, now
                 rest = interval - (time.monotonic() - t0)
                 if rest > 0.0005:
                     time.sleep(rest)
         finally:
             self.alive = False
+            time.sleep(0.3)
             try:
                 cam.release()
             except Exception:
