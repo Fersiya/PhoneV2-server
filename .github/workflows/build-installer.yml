@@ -24,7 +24,7 @@ jobs:
 
       - name: Сборка exe (PyInstaller)
         run: |
-          pip install pyinstaller dxcam pillow numpy
+          pip install pyinstaller dxcam pillow numpy opencv-python-headless
           pyinstaller --noconfirm --clean --onedir --noconsole --name PCControl --icon installer/icon.ico --add-data "installer/icon.ico;." --hidden-import tkinter --collect-all dxcam --collect-submodules comtypes server.py
 
       - name: "Проверка собранного сервера (запуск, ping и трансляция экрана)"
