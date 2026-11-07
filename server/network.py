@@ -306,8 +306,19 @@ def _watch_server_file_and_restart() -> None:
             pass
 
 
+def _prewarm_capture() -> None:
+    """Заранее подгружаем модули DXGI-захвата, чтобы трансляция стартовала без паузы."""
+    try:
+        import dxcam  # noqa: F401
+        import numpy  # noqa: F401
+        from PIL import Image  # noqa: F401
+    except Exception:
+        pass
+
+
 def start_network_services() -> None:
     """Запускает фоновые сетевые потоки: отслеживание файлов, UDP-мышь."""
     threading.Thread(target=_watch_server_file_and_restart, daemon=True).start()
     threading.Thread(target=_udp_mouse_worker, daemon=True).start()
+    threading.Thread(target=_prewarm_capture, daemon=True).start()
 
