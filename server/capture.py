@@ -191,9 +191,14 @@ def _screen_rect(all_monitors: bool, max_width: int):
     return sx, sy, sw, sh, dw, dh
 
 
-def _grab_into(buf: "_Buf", hdc_screen, sx, sy, sw, sh) -> None:
+def _grab_into(buf: "_Buf", hdc_screen, sx, sy, sw, sh, full: "_Buf" = None) -> None:
     if sw == buf.w and sh == buf.h:
         _gdi32.BitBlt(buf.hdc, 0, 0, buf.w, buf.h, hdc_screen, sx, sy, 0x00CC0020)
+    elif full is not None:
+        # Способ 2: быстро копируем экран целиком в память, а уменьшаем уже из памяти
+        _gdi32.BitBlt(full.hdc, 0, 0, sw, sh, hdc_screen, sx, sy, 0x00CC0020)
+        _gdi32.SetStretchBltMode(buf.hdc, 3)
+        _gdi32.StretchBlt(buf.hdc, 0, 0, buf.w, buf.h, full.hdc, 0, 0, sw, sh, 0x00CC0020)
     else:
         _gdi32.SetStretchBltMode(buf.hdc, 3)
         _gdi32.StretchBlt(buf.hdc, 0, 0, buf.w, buf.h, hdc_screen, sx, sy, sw, sh, 0x00CC0020)
@@ -299,6 +304,8 @@ class _FrameHub:
         free.put(0)
         free.put(1)
         t_log = time.monotonic()
+        full = None
+        use_full = None  # None — ещё не выбрано
         try:
             while self.alive:
                 t0 = time.monotonic()
@@ -317,7 +324,32 @@ class _FrameHub:
                     if buf:
                         buf.free()
                     buf = bufs[idx] = _Buf(hdc_screen, dw, dh)
-                _grab_into(buf, hdc_screen, sx, sy, sw, sh)
+                if use_full is None and (sw != dw or sh != dh):
+                    # Один раз сравниваем два способа съёмки на этом ПК и выбираем быстрее
+                    try:
+                        trial = _Buf(hdc_screen, sw, sh)
+                        res = {}
+                        for mode in (False, True):
+                            ts = []
+                            for _ in range(6):
+                                a0 = time.monotonic()
+                                _grab_into(buf, hdc_screen, sx, sy, sw, sh, trial if mode else None)
+                                ts.append(time.monotonic() - a0)
+                            ts.sort()
+                            res[mode] = ts[len(ts) // 2]
+                        use_full = res[True] < res[False] * 0.85
+                        full = trial if use_full else None
+                        if not use_full:
+                            trial.free()
+                        from .config import log
+                        log(f"[Stream] съёмка: напрямую {res[False] * 1000:.0f} мс, через память {res[True] * 1000:.0f} мс → "
+                            f"выбрано «{'через память' if use_full else 'напрямую'}»")
+                    except Exception:
+                        use_full = False
+                if full is not None and (full.w != sw or full.h != sh):
+                    full.free()
+                    full = _Buf(hdc_screen, sw, sh)
+                _grab_into(buf, hdc_screen, sx, sy, sw, sh, full)
                 stats["grab"] += time.monotonic() - t0
                 ready.put(idx)
                 now = time.monotonic()
@@ -337,7 +369,7 @@ class _FrameHub:
         finally:
             self.alive = False
             time.sleep(0.6)
-            for b in bufs:
+            for b in bufs + [full]:
                 if b:
                     b.free()
             try:
