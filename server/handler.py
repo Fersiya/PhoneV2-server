@@ -654,4 +654,8 @@ class PcServer(ThreadingHTTPServer):
         super().server_bind()
 
     def handle_error(self, request, client_address):
+        import sys
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            return  # телефон сам закрыл соединение (смена сети, закрыл приложение) — это не ошибка
         log(f"[!] Ошибка обработчика {client_address[0]}: {traceback.format_exc()}")
