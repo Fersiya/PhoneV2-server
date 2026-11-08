@@ -225,3 +225,23 @@ class PairingViaTunnelTestCase(unittest.TestCase):
 
     def test_pair_blocked_for_trycloudflare_host(self):
         self.assertEqual(self._pair({"Host": "abc-def.trycloudflare.com"}), 403)
+
+
+class DetectedAppsTestCase(unittest.TestCase):
+    """«Найти установленные программы»: уже добавленные не предлагаются повторно."""
+
+    def test_existing_ids_are_skipped(self):
+        from server import apps, config
+        fake = [
+            {"id": "steam", "title": "Steam", "launch": ["steam.exe"], "process": "steam.exe", "force": False},
+            {"id": "obs", "title": "OBS Studio", "launch": ["obs64.exe"], "process": "obs64.exe", "force": False},
+        ]
+        old_cfg, old_detect = dict(apps.CFG), config.detect_default_apps
+        try:
+            apps.CFG.clear()
+            apps.CFG["apps"] = [{"id": "steam", "title": "Steam", "launch": ["steam.exe"], "process": "steam.exe"}]
+            config.detect_default_apps = lambda: fake
+            self.assertEqual([a["id"] for a in apps.detected_apps()], ["obs"])
+        finally:
+            apps.CFG.clear(); apps.CFG.update(old_cfg)
+            config.detect_default_apps = old_detect

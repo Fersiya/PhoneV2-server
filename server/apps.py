@@ -32,6 +32,8 @@ __all__ = [
     "invalidate_process_cache",
     "running_processes",
     "launch_app",
+    "detected_apps",
+    "add_detected_apps",
     "close_app",
     "add_custom_app",
     "delete_custom_app",
@@ -185,6 +187,39 @@ def add_custom_app(body: str) -> Tuple[int, str]:
 
     reload_config_if_needed()
     return 200, "ok"
+
+
+def detected_apps() -> list:
+    """Установленные на ПК известные программы, которых ещё нет в списке (для кнопки «Найти установленные»)."""
+    from .config import detect_default_apps
+    have_ids = {str(a.get("id")) for a in CFG.get("apps", [])}
+    have_proc = {str(a.get("process") or "").lower() for a in CFG.get("apps", []) if a.get("process")}
+    out = []
+    for a in detect_default_apps():
+        if a["id"] in have_ids:
+            continue
+        if a.get("process") and str(a["process"]).lower() in have_proc:
+            continue
+        out.append(a)
+    return out
+
+
+def add_detected_apps(body: str) -> Tuple[int, str]:
+    """Добавляет в список найденные программы по их id: {"ids": ["steam", ...]}."""
+    global CFG
+    try:
+        ids = set(json.loads(body).get("ids", []))
+    except Exception:
+        return 400, "некорректный JSON"
+    to_add = [a for a in detected_apps() if a["id"] in ids]
+    if not to_add:
+        return 404, "ничего не найдено"
+    from .config import _cfg_lock
+    with _cfg_lock:
+        CFG["apps"] = list(CFG.get("apps", [])) + to_add
+        save_config(CFG)
+    reload_config_if_needed()
+    return 200, f"добавлено: {len(to_add)}"
 
 
 def delete_custom_app(app_id: str) -> Tuple[int, str]:

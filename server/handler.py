@@ -30,6 +30,8 @@ from .windows import list_open_windows, control_window, get_active_window_title
 from .apps import (
     running_processes,
     launch_app,
+    detected_apps,
+    add_detected_apps,
     close_app,
     add_custom_app,
     delete_custom_app,
@@ -436,6 +438,13 @@ class Handler(BaseHTTPRequestHandler):
                 "application/json",
             )
 
+        if path == "/apps/detected":
+            return self._reply(
+                200,
+                json.dumps([{"id": a["id"], "title": a["title"]} for a in detected_apps()], ensure_ascii=False),
+                "application/json",
+            )
+
         if path == "/apps":
             running = running_processes()
             apps = []
@@ -515,6 +524,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply(code, msg)
 
         body = self._read_body().strip()
+
+        if path == "/apps/detected/add":
+            code, text = add_detected_apps(body)
+            log(f"apps/detected/add: {code} {text}")
+            return self._reply(code, text)
 
         if path == "/apps/add":
             code, text = add_custom_app(body)
