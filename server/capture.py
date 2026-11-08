@@ -283,7 +283,11 @@ class _FrameHub:
     забирает самый свежий (медленный телефон пропускает кадры, а не копит задержку)."""
 
     def __init__(self, key: tuple) -> None:
-        self.key = key  # (w, q, all_monitors, fps)
+        self.key = key  # (w, q, all_monitors, fps[, "h264", kbps])
+        self.pipe = None
+        if len(key) > 4 and key[4] == "h264":
+            from .h264 import H264Pipeline
+            self.pipe = H264Pipeline(key[3], key[5] if len(key) > 5 else 4000)
         self.cond = threading.Condition()
         self.frame = b""
         self.frame_view = (0.0, 0.0, 1.0, 1.0)
@@ -326,7 +330,7 @@ class _FrameHub:
             except Exception as e:
                 log(f"[Stream] нет ни OpenCV, ни Pillow: {e}")
                 return False
-        w, q, all_mons, fps = self.key
+        w, q, all_mons, fps = self.key[:4]
         cam = None
         first = None
         last_err = None
@@ -359,6 +363,7 @@ class _FrameHub:
 
         def encode(arr):
             sh, sw = arr.shape[0], arr.shape[1]
+            full_w, full_h = sw, sh
             vx0, vy0, vx1, vy1 = self.view
             px0, py0 = int(vx0 * sw), int(vy0 * sh)
             px1, py1 = max(px0 + 16, int(vx1 * sw)), max(py0 + 16, int(vy1 * sh))
@@ -377,6 +382,16 @@ class _FrameHub:
             have_cur = bool(_user32.GetCursorPos(ctypes.byref(pt)))
             cx, cy = int((pt.x - px0) * dw / cw), int((pt.y - py0) * dh / ch)
             have_cur = have_cur and 0 <= cx < dw and 0 <= cy < dh
+            if self.pipe is not None and cv2 is not None:
+                # H.264: размер кадра постоянный (чётный), приближение — это обрезка экрана + масштаб до этого размера
+                ow, oh = (w // 2) * 2, (int(full_h * w / full_w) // 2) * 2
+                interp = cv2.INTER_AREA if cw >= ow else cv2.INTER_LINEAR
+                img = cv2.resize(arr, (ow, oh), interpolation=interp)
+                if have_cur:
+                    cv2.circle(img, (int((pt.x - px0) * ow / cw), int((pt.y - py0) * oh / ch)), 6, (48, 48, 255), -1)
+                    cv2.circle(img, (int((pt.x - px0) * ow / cw), int((pt.y - py0) * oh / ch)), 6, (255, 255, 255), 2)
+                self.pipe.push(img, view)
+                return b"", view
             if cv2 is not None:
                 img = cv2.resize(arr, (dw, dh), interpolation=cv2.INTER_AREA) if dw != cw else arr.copy()
                 if have_cur:
@@ -414,7 +429,7 @@ class _FrameHub:
                             pub["seq"] = seq
                             self._publish(jpg, vw)
 
-        n_enc = 3 if cv2 is not None else 2
+        n_enc = 1 if self.pipe is not None else (3 if cv2 is not None else 2)
         for _ in range(n_enc):
             threading.Thread(target=encoder, daemon=True).start()
         hz = _refresh_hz()
@@ -484,8 +499,12 @@ class _FrameHub:
                     log(f"[Stream] ошибка DXGI-захвата, перехожу на GDI: {e}")
                 except Exception:
                     pass
+        if self.pipe is not None:
+            self.pipe.error = "H.264 доступен только при DXGI-захвате"
+            self.alive = False
+            return
         import queue
-        w, q, all_mons, fps = self.key
+        w, q, all_mons, fps = self.key[:4]
         interval = 1.0 / fps
         free: "queue.Queue" = queue.Queue()
         ready: "queue.Queue" = queue.Queue(maxsize=1)
@@ -607,8 +626,8 @@ _hubs: dict = {}
 _hubs_lock = threading.Lock()
 
 
-def acquire_hub(w: int, q: int, all_mons: bool, fps: int) -> _FrameHub:
-    key = (w, q, all_mons, fps)
+def acquire_hub(w: int, q: int, all_mons: bool, fps: int, kbps: int = 0) -> _FrameHub:
+    key = (w, q, all_mons, fps) if not kbps else (w, q, all_mons, fps, "h264", kbps)
     with _hubs_lock:
         hub = _hubs.get(key)
         if hub is None or not hub.alive:
@@ -644,5 +663,7 @@ def release_hub(hub: _FrameHub) -> None:
         hub.clients -= 1
         if hub.clients <= 0:
             hub.alive = False
+            if hub.pipe is not None:
+                hub.pipe.stop()
             if _hubs.get(hub.key) is hub:
                 del _hubs[hub.key]

@@ -35,4 +35,19 @@ while True:
     buf = buf[-16:]
 fps = frames / 5.0
 print(f"stream: {frames} frames in 5 s ({fps:.1f} fps)")
-sys.exit(0 if frames >= 5 else 1)
+ok = frames >= 5
+resp.close()
+
+# H.264 (бета): информативная проверка — не роняет сборку, но показывает, работает ли ffmpeg внутри собранного exe
+try:
+    import struct
+    r2 = urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:8765/h264?fps=30&w=960&kbps=3000", headers={"X-Token": token}), timeout=30)
+    print("h264 headers:", r2.headers.get("X-Width"), r2.headers.get("X-Height"), r2.headers.get("X-Encoder"))
+    head = r2.read(21)
+    n, flags = struct.unpack(">IB", head[:5])
+    body = r2.read(min(n, 64))
+    print(f"h264: first packet {n} bytes, key={flags & 1}, starts {body[:6].hex()}")
+    r2.close()
+except Exception as e:
+    print("h264 (non-fatal):", str(e).encode("ascii", "replace").decode())
+sys.exit(0 if ok else 1)

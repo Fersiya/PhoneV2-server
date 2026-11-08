@@ -365,6 +365,55 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 release_hub(hub)
 
+        if path == "/h264":
+            # Бета: H.264-поток. Пакеты: >I длина, B флаги (1=ключевой), 4×float32 область экрана, данные.
+            qs = parse_qs(parsed.query)
+            try:
+                fps = max(15, min(120, int(qs.get("fps", ["60"])[0])))
+                w = max(480, min(1920, int(qs.get("w", ["1280"])[0])))
+                kbps = max(500, min(30000, int(qs.get("kbps", ["6000"])[0])))
+                all_mons = qs.get("m", ["0"])[0] == "all"
+            except ValueError:
+                fps, w, kbps, all_mons = 60, 1280, 6000, False
+            if all_mons:
+                return self._reply(400, "H.264 пока только для одного монитора")
+            hub = acquire_hub(w, 0, False, fps, kbps)
+            pipe = hub.pipe
+            try:
+                if "x0" in qs:
+                    try:
+                        hub.set_view(*(float(qs[k][0]) for k in ("x0", "y0", "x1", "y1")))
+                    except (KeyError, ValueError):
+                        pass
+                t_end = time.monotonic() + 8.0
+                while pipe.size is None and not pipe.error and time.monotonic() < t_end:
+                    time.sleep(0.05)
+                if pipe.error or pipe.size is None:
+                    return self._reply(503, "H.264 недоступен: " + (pipe.error or "нет кадров"))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Cache-Control", "no-cache, no-store")
+                self.send_header("X-Width", str(pipe.size[0]))
+                self.send_header("X-Height", str(pipe.size[1]))
+                self.send_header("X-Encoder", str(pipe.encoder))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                try:
+                    self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except Exception:
+                    pass
+                cursor = -1
+                while not pipe.error and pipe.alive:
+                    cursor, chunks = pipe.wait_packets(cursor)
+                    if chunks:
+                        self.wfile.write(b"".join(chunks))
+                        self.wfile.flush()
+            except (ConnectionResetError, BrokenPipeError, socket.error):
+                return
+            finally:
+                release_hub(hub)
+            return
+
         if path == "/api/audio_info":
             return self._reply(200, json.dumps(audio_info(), ensure_ascii=False), "application/json")
 

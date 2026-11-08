@@ -245,3 +245,31 @@ class DetectedAppsTestCase(unittest.TestCase):
         finally:
             apps.CFG.clear(); apps.CFG.update(old_cfg)
             config.detect_default_apps = old_detect
+
+
+class H264FramingTestCase(unittest.TestCase):
+    """Нарезка потока H.264 на кадры и упаковка пакетов для приложения."""
+
+    @staticmethod
+    def _au(nal_type, body):
+        return b"\x00\x00\x00\x01\x09\xf0" + b"\x00\x00\x00\x01" + bytes([nal_type]) + body
+
+    def test_split_keeps_incomplete_tail(self):
+        from server.h264 import split_access_units
+        buf = self._au(0x65, b"idr") + self._au(0x41, b"p1") + self._au(0x41, b"p2")[:12]
+        units, rest = split_access_units(buf)
+        self.assertEqual([k for _, k in units], [True, False])
+        self.assertTrue(rest.startswith(b"\x00\x00\x00\x01\x09"))
+
+    def test_split_needs_two_delimiters(self):
+        from server.h264 import split_access_units
+        units, rest = split_access_units(self._au(0x65, b"x"))
+        self.assertEqual(units, [])
+
+    def test_pack_packet_layout(self):
+        import struct
+        from server.h264 import pack_packet
+        pkt = pack_packet(b"abc", True, (0.0, 0.25, 0.5, 1.0))
+        n, flags, x0, y0, x1, y1 = struct.unpack(">IBffff", pkt[:21])
+        self.assertEqual((n, flags, x0, y0, x1, y1), (3, 1, 0.0, 0.25, 0.5, 1.0))
+        self.assertEqual(pkt[21:], b"abc")
