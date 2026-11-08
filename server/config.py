@@ -23,6 +23,8 @@ __all__ = [
     "DETACHED_FLAGS",
     "BRAVE",
     "BROWSER_PROCESS",
+    "BROWSER_NAME",
+    "detect_default_apps",
     "DEFAULT_APPS",
     "CFG",
     "TOKEN",
@@ -88,46 +90,91 @@ IS_WINDOWS: bool = os.name == "nt"
 CREATE_NO_WINDOW: int = 0x08000000 if IS_WINDOWS else 0
 DETACHED_FLAGS: int = 0x00000208 if IS_WINDOWS else 0  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 
-BRAVE: str = r"%ProgramFiles%\BraveSoftware\Brave-Browser\Application\brave.exe"
-BROWSER_PROCESS: str = "brave.exe"
+import glob as _glob
 
-DEFAULT_APPS: List[Dict[str, Any]] = [
-    {
-        "id": "brave",
-        "title": "Brave",
-        "launch": [BRAVE],
-        "process": "brave.exe",
-        "force": False,
-    },
-    {
-        "id": "youtube",
-        "title": "YouTube в Brave",
-        "launch": [BRAVE, "https://www.youtube.com"],
-        "process": None,
-        "force": False,
-    },
-    {
-        "id": "discord",
-        "title": "Discord",
-        "launch": [r"%LOCALAPPDATA%\Discord\Update.exe", "--processStart", "Discord.exe"],
-        "process": "Discord.exe",
-        "force": True,
-    },
-    {
-        "id": "yandex-music",
-        "title": "Яндекс Музыка",
-        "launch": [r"%LOCALAPPDATA%\Programs\YandexMusic\Яндекс Музыка.exe"],
-        "process": "Яндекс Музыка.exe",
-        "force": True,
-    },
-    {
-        "id": "premiere",
-        "title": "Premiere Pro",
-        "launch": [r"%ProgramFiles%\Adobe\Adobe Premiere Pro 2026\Adobe Premiere Pro.exe"],
-        "process": "Adobe Premiere Pro.exe",
-        "force": False,
-    },
+
+def _exp(path: str) -> str:
+    return os.path.expandvars(path)
+
+
+def _first_existing(patterns: List[str]) -> str:
+    """Первый существующий путь из списка (поддерживает * для версий)."""
+    for pat in patterns:
+        p = _exp(pat)
+        if "*" in p:
+            hits = sorted(_glob.glob(p))
+            if hits:
+                return hits[-1]
+        elif os.path.exists(p):
+            return p
+    return ""
+
+
+# Браузеры по приоритету: (id, название, процесс, возможные пути)
+_BROWSERS = [
+    ("brave", "Brave", "brave.exe", [r"%ProgramFiles%\BraveSoftware\Brave-Browser\Application\brave.exe",
+                                     r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe"]),
+    ("chrome", "Chrome", "chrome.exe", [r"%ProgramFiles%\Google\Chrome\Application\chrome.exe",
+                                        r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe",
+                                        r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"]),
+    ("edge", "Edge", "msedge.exe", [r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
+                                    r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"]),
+    ("firefox", "Firefox", "firefox.exe", [r"%ProgramFiles%\Mozilla Firefox\firefox.exe",
+                                           r"%ProgramFiles(x86)%\Mozilla Firefox\firefox.exe"]),
 ]
+
+
+def _detect_browser() -> tuple:
+    """(id, название, процесс, путь) первого найденного браузера; без Windows — Brave по умолчанию."""
+    if os.name == "nt":
+        for bid, name, proc, paths in _BROWSERS:
+            found = _first_existing(paths)
+            if found:
+                return bid, name, proc, found
+    return "brave", "Brave", "brave.exe", _BROWSERS[0][3][0]
+
+
+_BROWSER_ID, BROWSER_NAME, BROWSER_PROCESS, BRAVE = _detect_browser()  # BRAVE — исторически «путь к браузеру»
+
+# Остальные известные программы: (id, название, процесс, force, команда запуска или список путей)
+_KNOWN_APPS = [
+    ("discord", "Discord", "Discord.exe", True, [r"%LOCALAPPDATA%\Discord\Update.exe", "--processStart", "Discord.exe"], [r"%LOCALAPPDATA%\Discord\Update.exe"]),
+    ("telegram", "Telegram", "Telegram.exe", True, None, [r"%APPDATA%\Telegram Desktop\Telegram.exe", r"%ProgramFiles%\Telegram Desktop\Telegram.exe"]),
+    ("spotify", "Spotify", "Spotify.exe", True, None, [r"%APPDATA%\Spotify\Spotify.exe"]),
+    ("yandex-music", "Яндекс Музыка", "Яндекс Музыка.exe", True, None, [r"%LOCALAPPDATA%\Programs\YandexMusic\Яндекс Музыка.exe"]),
+    ("steam", "Steam", "steam.exe", False, None, [r"%ProgramFiles(x86)%\Steam\steam.exe", r"%ProgramFiles%\Steam\steam.exe"]),
+    ("vscode", "VS Code", "Code.exe", False, None, [r"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe", r"%ProgramFiles%\Microsoft VS Code\Code.exe"]),
+    ("obs", "OBS Studio", "obs64.exe", False, None, [r"%ProgramFiles%\obs-studio\bin\64bit\obs64.exe"]),
+    ("premiere", "Premiere Pro", "Adobe Premiere Pro.exe", False, None, [r"%ProgramFiles%\Adobe\Adobe Premiere Pro *\Adobe Premiere Pro.exe"]),
+    ("aftereffects", "After Effects", "AfterFX.exe", False, None, [r"%ProgramFiles%\Adobe\Adobe After Effects *\Support Files\AfterFX.exe"]),
+    ("davinci", "DaVinci Resolve", "Resolve.exe", False, None, [r"%ProgramFiles%\Blackmagic Design\DaVinci Resolve\Resolve.exe"]),
+    ("notepad", "Блокнот", "notepad.exe", False, [r"%SystemRoot%\System32\notepad.exe"], [r"%SystemRoot%\System32\notepad.exe"]),
+]
+
+
+def detect_default_apps() -> List[Dict[str, Any]]:
+    """Список программ для первого запуска: только то, что реально установлено на этом ПК."""
+    apps: List[Dict[str, Any]] = [
+        {"id": _BROWSER_ID, "title": BROWSER_NAME, "launch": [BRAVE], "process": BROWSER_PROCESS, "force": False},
+        {"id": "youtube", "title": f"YouTube в {BROWSER_NAME}", "launch": [BRAVE, "https://www.youtube.com"], "process": None, "force": False},
+    ]
+    if os.name != "nt":
+        return apps
+    for aid, title, proc, force, launch, paths in _KNOWN_APPS:
+        found = _first_existing(paths)
+        if not found:
+            continue
+        if launch is None:
+            launch_cmd = [found]
+        elif len(launch) == 1:
+            launch_cmd = [found]
+        else:
+            launch_cmd = [launch[0], *launch[1:]]
+        apps.append({"id": aid, "title": title, "launch": launch_cmd, "process": proc, "force": force})
+    return apps
+
+
+DEFAULT_APPS: List[Dict[str, Any]] = detect_default_apps()
 
 _cfg_lock = threading.Lock()
 _cfg_mtime: float = -1.0

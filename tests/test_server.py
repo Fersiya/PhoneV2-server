@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from server.config import DEFAULT_APPS, PORT
+from server.config import DEFAULT_APPS, PORT, detect_default_apps
 from server.files import is_safe_path, MEDIA_EXTS
 from server.power import POWER
 from server.media_keys import MEDIA_KEYS, COMBO_KEYS
@@ -162,6 +162,17 @@ class AudioConverterTestCase(unittest.TestCase):
         conv = AudioConverter(44100, 2, False)
         self.assertEqual(conv.convert(b"abcd"), b"abcd")
         self.assertEqual((conv.out_rate, conv.out_channels), (44100, 2))
+
+
+
+class DetectAppsTestCase(unittest.TestCase):
+    def test_always_has_browser_and_youtube(self):
+        apps = detect_default_apps()
+        ids = [a["id"] for a in apps]
+        self.assertIn("youtube", ids)
+        self.assertEqual(len(ids), len(set(ids)))
+        for a in apps:
+            self.assertTrue(a["launch"] and a["title"])
 
 
 if __name__ == "__main__":

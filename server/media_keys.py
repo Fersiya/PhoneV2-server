@@ -87,7 +87,7 @@ def send_media_key(action: str) -> Tuple[int, str]:
     try:
         if action in BROWSER_ACTIONS:
             if not focus_browser():
-                return 409, "Brave не открыт или не вышел на передний план. Открой видео кнопкой «На ПК»."
+                return 409, "Браузер не открыт или не вышел на передний план. Открой видео кнопкой «На ПК»."
             time.sleep(0.08)
 
         if action in COMBO_KEYS:
