@@ -161,9 +161,9 @@ def show_status_dialog() -> None:
 
             root = tk.Tk()
             root.title("Пульт ПК Хост")
-            root.geometry("520x620")
+            root.geometry("540x700")
             root.resizable(True, True)
-            root.minsize(480, 560)
+            root.minsize(480, 480)
             root.configure(bg=BG)
             root.attributes("-topmost", True)
             root.after(600, lambda: root.attributes("-topmost", False))
@@ -219,16 +219,27 @@ def show_status_dialog() -> None:
 
             # --- адреса в Wi-Fi ---
             c1 = card("Адрес в домашней сети (Wi-Fi)")
-            ips = [ip for ip in get_local_ips() if not ip.startswith("169.254.")] or ["127.0.0.1"]
+            def _is_tailscale(ip):  # 100.64.0.0/10 — адреса Tailscale, они показаны ниже отдельно
+                try:
+                    a, b = ip.split(".")[:2]
+                    return a == "100" and 64 <= int(b) <= 127
+                except Exception:
+                    return False
+
+            all_ips = [ip for ip in get_local_ips() if not ip.startswith("169.254.") and not _is_tailscale(ip)]
+            # домашний адрес — обычно 192.168.x.x / 10.x / 172.16-31.x; остальные (виртуальные адаптеры) не нужны
+            private = [ip for ip in all_ips if ip.startswith(("192.168.", "10.")) or (ip.startswith("172.") and 16 <= int(ip.split(".")[1]) <= 31)]
+            ips = (private or all_ips or ["127.0.0.1"])[:1]
             for ip in ips:
                 field_row(c1, f"{ip}", fg=TEXT)
+            label(c1, "Приложение находит ПК само. Адрес нужен, только если поиск не сработал.", 9, False, MUTED).pack(anchor="w", pady=(6, 0))
 
             # --- сопряжение с телефоном ---
             open_pairing(300)  # пока окно открыто, телефон в домашней сети может получить токен кнопкой
             c0 = card("Подключение телефона")
             pair_lbl = label(c0, "", 10, True, OK)
             pair_lbl.pack(anchor="w", pady=(4, 0))
-            label(c0, "В приложении: Опции → «Найти ПК в сети Wi-Fi»", 9, False, MUTED).pack(anchor="w", pady=(2, 0))
+            label(c0, "В приложении: Опции → «Найти ПК в Wi-Fi»", 9, False, MUTED).pack(anchor="w", pady=(2, 0))
             button(c0, "🔓 Продлить на 5 минут", lambda: open_pairing(300), bg=BTN).pack(anchor="w", pady=(6, 0))
 
             # --- токен ---
@@ -244,6 +255,7 @@ def show_status_dialog() -> None:
                                font=("Consolas", 9), bd=6, textvariable=ts_var)
             tun_url.pack(fill="x", pady=(4, 0))
             label(c3, "Установите Tailscale на ПК и телефоне и войдите в один аккаунт — приложение подключится само.", 9, False, MUTED).pack(anchor="w", pady=(6, 0))
+            c3.winfo_children()[-1].config(wraplength=460, justify="left")
             button(c3, "Копировать адрес", lambda: _copy_to_clipboard(ts_var.get()), bg=BTN).pack(anchor="w", pady=(6, 0))
 
             def refresh():
@@ -286,6 +298,13 @@ def show_status_dialog() -> None:
             btn_upd = button(foot, "⬆ Обновления", check_updates)
             btn_upd.pack(side="left")
             button(foot, "Закрыть", root.destroy).pack(side="right")
+
+            # окно подгоняется под содержимое, чтобы нижние кнопки (обновления) всегда были видны
+            root.update_idletasks()
+            w = max(540, root.winfo_reqwidth())
+            h = min(root.winfo_reqheight() + 8, root.winfo_screenheight() - 80)
+            root.geometry(f"{w}x{h}")
+            root.minsize(w, min(h, 480))
 
             root.protocol("WM_DELETE_WINDOW", root.destroy)
             root.mainloop()
